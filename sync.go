@@ -1,354 +1,329 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
 
-func validatePaths(source, destination string) error {
-	sourceInfo, err := os.Stat(source)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("source does not exist: %s", source)
-		}
-		return fmt.Errorf("cannot access source: %w", err)
-	}
+var errSamePath = errors.New("source and destination must be different paths")
 
-	if !sourceInfo.IsDir() {
-		return fmt.Errorf("source is not a directory: %s", source)
-	}
-
-	sourceAbs, err := filepath.Abs(source)
-	if err != nil {
-		return fmt.Errorf("cannot resolve source path: %w", err)
-	}
-
-	destinationAbs, err := filepath.Abs(destination)
-	if err != nil {
-		return fmt.Errorf("cannot resolve destination path: %w", err)
-	}
-
-	sourceAbs, err = filepath.EvalSymlinks(sourceAbs)
-	if err != nil {
-		return fmt.Errorf("cannot resolve source path: %w", err)
-	}
-
-	if destinationInfo, err := os.Stat(destination); err == nil {
-		if !destinationInfo.IsDir() {
-			return fmt.Errorf("destination is not a directory: %s", destination)
-		}
-
-		destinationAbs, err = filepath.EvalSymlinks(destinationAbs)
-		if err != nil {
-			return fmt.Errorf("cannot resolve destination path: %w", err)
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("cannot access destination: %w", err)
-	}
-
-	if samePath(sourceAbs, destinationAbs) {
-		return fmt.Errorf("source and destination must be different paths")
-	}
-
-	if isInside(sourceAbs, destinationAbs) {
-		return fmt.Errorf("destination must not be inside source")
-	}
-
-	if isInside(destinationAbs, sourceAbs) {
-		return fmt.Errorf("source must not be inside destination")
-	}
-
-	return nil
+type change struct {
+	kind  byte
+	path  string
+	isDir bool
+	note  string
 }
 
-func syncDirs(source, destination string, dryRun bool, stdout io.Writer) error {
+func (c change) String() string {
+	s := fmt.Sprintf("%c %s", c.kind, c.path)
+	if c.isDir {
+		s += "/"
+	}
+	if c.note != "" {
+		s += " (" + c.note + ")"
+	}
+	return s
+}
+
+type syncer struct {
+	dryRun  bool
+	changes []change
+}
+
+func syncDirs(source, destination string, dryRun bool) ([]change, error) {
 	if err := validatePaths(source, destination); err != nil {
-		return err
+		return nil, err
 	}
 
-	if !dryRun {
-		if err := os.MkdirAll(destination, 0o755); err != nil {
-			return fmt.Errorf("create destination: %w", err)
+	s := &syncer{dryRun: dryRun}
+
+	_, err := os.Stat(destination)
+	dstExists := err == nil
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("cannot access destination %s: %w", destination, err)
+	}
+	if !dstExists {
+		if !dryRun {
+			if err := os.MkdirAll(destination, 0o755); err != nil {
+				return nil, fmt.Errorf("cannot create destination %s: %w", destination, err)
+			}
 		}
+		s.record('+', ".", true)
 	}
 
-	entries, err := os.ReadDir(source)
-	if err != nil {
-		return fmt.Errorf("read source: %w", err)
-	}
-
-	seen := make(map[string]bool)
-
-	for _, entry := range entries {
-		name := entry.Name()
-		seen[name] = true
-
-		srcPath := filepath.Join(source, name)
-		dstPath := filepath.Join(destination, name)
-
-		if err := syncEntry(srcPath, dstPath, dryRun, stdout); err != nil {
-			return err
-		}
-	}
-
-	return removeExtraEntries(destination, seen, dryRun, stdout)
+	err = s.syncDir(source, destination, "", dstExists)
+	return s.changes, err
 }
 
-func syncEntry(source, destination string, dryRun bool, stdout io.Writer) error {
-	sourceInfo, err := os.Stat(source)
+func (s *syncer) record(kind byte, rel string, isDir bool) {
+	s.changes = append(s.changes, change{kind: kind, path: rel, isDir: isDir})
+}
+
+func (s *syncer) syncDir(srcDir, dstDir, rel string, dstExists bool) error {
+	srcEntries, err := os.ReadDir(srcDir)
 	if err != nil {
-		return fmt.Errorf("inspect %s: %w", source, err)
+		return fmt.Errorf("cannot read source directory %s: %w", srcDir, err)
 	}
 
-	destinationInfo, err := os.Stat(destination)
-
-	if os.IsNotExist(err) {
-		if sourceInfo.IsDir() {
-			fmt.Fprintf(stdout, "+ %s\n", destination)
-
-			if !dryRun {
-				if err := os.MkdirAll(destination, sourceInfo.Mode()); err != nil {
-					return fmt.Errorf("create directory %s: %w", destination, err)
-				}
-			}
-
-			entries, err := os.ReadDir(source)
-			if err != nil {
-				return fmt.Errorf("read directory %s: %w", source, err)
-			}
-
-			seen := make(map[string]bool)
-
-			for _, entry := range entries {
-				seen[entry.Name()] = true
-
-				srcPath := filepath.Join(source, entry.Name())
-				dstPath := filepath.Join(destination, entry.Name())
-
-				if err := syncEntry(srcPath, dstPath, dryRun, stdout); err != nil {
-					return err
-				}
-			}
-
-			return removeExtraEntries(destination, seen, dryRun, stdout)
-		}
-
-		fmt.Fprintf(stdout, "+ %s\n", destination)
-
-		if !dryRun {
-			if err := copyFile(source, destination, sourceInfo.Mode()); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("inspect destination %s: %w", destination, err)
-	}
-
-	if sourceInfo.IsDir() {
-		if !destinationInfo.IsDir() {
-			fmt.Fprintf(stdout, "~ %s\n", destination)
-
-			if !dryRun {
-				if err := os.RemoveAll(destination); err != nil {
-					return fmt.Errorf("remove %s: %w", destination, err)
-				}
-
-				if err := os.MkdirAll(destination, sourceInfo.Mode()); err != nil {
-					return fmt.Errorf("create directory %s: %w", destination, err)
-				}
-			}
-		}
-
-		entries, err := os.ReadDir(source)
+	var dstEntries []fs.DirEntry
+	if dstExists {
+		dstEntries, err = os.ReadDir(dstDir)
 		if err != nil {
-			return fmt.Errorf("read directory %s: %w", source, err)
+			return fmt.Errorf("cannot read destination directory %s: %w", dstDir, err)
 		}
-
-		seen := make(map[string]bool)
-
-		for _, entry := range entries {
-			seen[entry.Name()] = true
-
-			srcPath := filepath.Join(source, entry.Name())
-			dstPath := filepath.Join(destination, entry.Name())
-
-			if err := syncEntry(srcPath, dstPath, dryRun, stdout); err != nil {
-				return err
-			}
-		}
-
-		return removeExtraEntries(destination, seen, dryRun, stdout)
 	}
 
-	if destinationInfo.IsDir() {
-		fmt.Fprintf(stdout, "~ %s\n", destination)
-
-		if !dryRun {
-			if err := os.RemoveAll(destination); err != nil {
-				return fmt.Errorf("remove %s: %w", destination, err)
-			}
-
-			if err := copyFile(source, destination, sourceInfo.Mode()); err != nil {
-				return err
-			}
-		}
-
-		return nil
+	dstByName := make(map[string]fs.DirEntry, len(dstEntries))
+	for _, e := range dstEntries {
+		dstByName[e.Name()] = e
 	}
 
-	same, err := filesEqual(source, destination)
-	if err != nil {
-		return err
-	}
-
-	if same {
-		return nil
-	}
-
-	fmt.Fprintf(stdout, "~ %s\n", destination)
-
-	if !dryRun {
-		if err := copyFile(source, destination, sourceInfo.Mode()); err != nil {
+	inSource := make(map[string]bool, len(srcEntries))
+	for _, srcEntry := range srcEntries {
+		name := srcEntry.Name()
+		inSource[name] = true
+		err := s.syncEntry(srcEntry, dstByName[name], filepath.Join(srcDir, name), filepath.Join(dstDir, name), path.Join(rel, name))
+		if err != nil {
 			return err
 		}
 	}
 
-	return nil
-}
-
-func removeExtraEntries(destination string, seen map[string]bool, dryRun bool, stdout io.Writer) error {
-	entries, err := os.ReadDir(destination)
-	if os.IsNotExist(err) {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("read destination %s: %w", destination, err)
-	}
-
-	for _, entry := range entries {
-		if seen[entry.Name()] {
+	for _, dstEntry := range dstEntries {
+		name := dstEntry.Name()
+		if inSource[name] {
 			continue
 		}
+		relPath := path.Join(rel, name)
+		if err := s.removeDst(filepath.Join(dstDir, name), relPath); err != nil {
+			return err
+		}
+		s.record('-', relPath, dstEntry.IsDir())
+	}
+	return nil
+}
 
-		path := filepath.Join(destination, entry.Name())
+func (s *syncer) syncEntry(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel string) error {
+	typ := srcEntry.Type()
+	switch {
+	case typ.IsDir():
+		return s.syncSubdir(srcEntry, dstEntry, srcPath, dstPath, rel)
+	case typ.IsRegular():
+		return s.syncFile(srcEntry, dstEntry, srcPath, dstPath, rel)
+	default:
+		note := "skipped: unsupported file type"
+		if typ&fs.ModeSymlink != 0 {
+			note = "skipped: symlink"
+		}
+		s.changes = append(s.changes, change{kind: '!', path: rel, note: note})
+		return nil
+	}
+}
 
-		fmt.Fprintf(stdout, "- %s\n", path)
+func (s *syncer) syncSubdir(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel string) error {
+	dstExists := dstEntry != nil
+	kind := byte('+')
 
-		if !dryRun {
-			if err := os.RemoveAll(path); err != nil {
-				return fmt.Errorf("remove %s: %w", path, err)
+	if dstExists && !dstEntry.IsDir() {
+		if err := s.removeDst(dstPath, rel); err != nil {
+			return err
+		}
+		dstExists = false
+		kind = '~'
+	}
+
+	if !dstExists {
+		if !s.dryRun {
+			info, err := srcEntry.Info()
+			if err != nil {
+				return fmt.Errorf("cannot stat source directory %s: %w", srcPath, err)
 			}
+			if err := os.Mkdir(dstPath, info.Mode().Perm()|0o700); err != nil {
+				return fmt.Errorf("cannot create directory %s: %w", rel, err)
+			}
+		}
+		s.record(kind, rel, true)
+	}
+
+	return s.syncDir(srcPath, dstPath, rel, dstExists)
+}
+
+func (s *syncer) syncFile(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel string) error {
+	srcInfo, err := srcEntry.Info()
+	if err != nil {
+		return fmt.Errorf("cannot stat source file %s: %w", srcPath, err)
+	}
+
+	kind := byte('+')
+	if dstEntry != nil {
+		kind = '~'
+		if dstEntry.Type().IsRegular() {
+			dstInfo, err := dstEntry.Info()
+			if err != nil {
+				return fmt.Errorf("cannot stat destination file %s: %w", dstPath, err)
+			}
+			same, err := sameContent(srcPath, dstPath, srcInfo, dstInfo)
+			if err != nil {
+				return fmt.Errorf("cannot compare %s: %w", rel, err)
+			}
+			if same {
+				return nil
+			}
+		} else if err := s.removeDst(dstPath, rel); err != nil {
+			return err
 		}
 	}
 
+	if !s.dryRun {
+		if err := copyFile(srcPath, dstPath, srcInfo); err != nil {
+			return fmt.Errorf("cannot copy %s: %w", rel, err)
+		}
+	}
+	s.record(kind, rel, false)
 	return nil
 }
 
-func copyFile(source, destination string, mode os.FileMode) error {
-	input, err := os.Open(source)
-	if err != nil {
-		return fmt.Errorf("open source %s: %w", source, err)
+func (s *syncer) removeDst(dstPath, rel string) error {
+	if s.dryRun {
+		return nil
 	}
-	defer input.Close()
-
-	output, err := os.OpenFile(
-		destination,
-		os.O_CREATE|os.O_WRONLY|os.O_TRUNC,
-		mode,
-	)
-	if err != nil {
-		return fmt.Errorf("create destination %s: %w", destination, err)
+	if err := os.RemoveAll(dstPath); err != nil {
+		return fmt.Errorf("cannot remove %s: %w", rel, err)
 	}
-	defer output.Close()
-
-	if _, err := io.Copy(output, input); err != nil {
-		return fmt.Errorf("copy %s to %s: %w", source, destination, err)
-	}
-
 	return nil
 }
 
-func filesEqual(source, destination string) (bool, error) {
-	sourceInfo, err := os.Stat(source)
-	if err != nil {
-		return false, fmt.Errorf("inspect source: %w", err)
-	}
-
-	destinationInfo, err := os.Stat(destination)
-	if err != nil {
-		return false, fmt.Errorf("inspect destination: %w", err)
-	}
-
-	if sourceInfo.Size() != destinationInfo.Size() {
+func sameContent(a, b string, aInfo, bInfo fs.FileInfo) (bool, error) {
+	if aInfo.Size() != bInfo.Size() {
 		return false, nil
 	}
 
-	sourceFile, err := os.Open(source)
+	fa, err := os.Open(a)
 	if err != nil {
-		return false, fmt.Errorf("open source: %w", err)
+		return false, err
 	}
-	defer sourceFile.Close()
-
-	destinationFile, err := os.Open(destination)
+	defer fa.Close()
+	fb, err := os.Open(b)
 	if err != nil {
-		return false, fmt.Errorf("open destination: %w", err)
+		return false, err
 	}
-	defer destinationFile.Close()
+	defer fb.Close()
 
-	const bufferSize = 32 * 1024
-
-	sourceBuffer := make([]byte, bufferSize)
-	destinationBuffer := make([]byte, bufferSize)
-
+	bufA := make([]byte, 32*1024)
+	bufB := make([]byte, 32*1024)
 	for {
-		sourceN, sourceErr := sourceFile.Read(sourceBuffer)
-		destinationN, destinationErr := destinationFile.Read(destinationBuffer)
-
-		if sourceN != destinationN {
+		nA, errA := io.ReadFull(fa, bufA)
+		nB, errB := io.ReadFull(fb, bufB)
+		if nA != nB || !bytes.Equal(bufA[:nA], bufB[:nB]) {
 			return false, nil
 		}
-
-		for i := 0; i < sourceN; i++ {
-			if sourceBuffer[i] != destinationBuffer[i] {
-				return false, nil
-			}
+		if errA == nil && errB == nil {
+			continue
 		}
-
-		if sourceErr == io.EOF && destinationErr == io.EOF {
+		if isEOF(errA) && isEOF(errB) {
 			return true, nil
 		}
-
-		if sourceErr != nil {
-			return false, fmt.Errorf("read source: %w", sourceErr)
+		if errA != nil && !isEOF(errA) {
+			return false, errA
 		}
-
-		if destinationErr != nil {
-			return false, fmt.Errorf("read destination: %w", destinationErr)
+		if errB != nil && !isEOF(errB) {
+			return false, errB
 		}
+		return false, nil
 	}
 }
 
-func samePath(a, b string) bool {
-	return filepath.Clean(a) == filepath.Clean(b)
+func isEOF(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func copyFile(srcPath, dstPath string, info fs.FileInfo) (err error) {
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(dstPath), ".dios-tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if err != nil {
+			os.Remove(tmpName)
+		}
+	}()
+
+	if _, err = io.Copy(tmp, in); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Chmod(tmpName, info.Mode().Perm()); err != nil {
+		return err
+	}
+	if err = os.Chtimes(tmpName, info.ModTime(), info.ModTime()); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, dstPath)
+}
+
+func validatePaths(source, destination string) error {
+	srcInfo, err := os.Stat(source)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("source does not exist: %s", source)
+	}
+	if err != nil {
+		return fmt.Errorf("cannot access source %s: %w", source, err)
+	}
+	if !srcInfo.IsDir() {
+		return fmt.Errorf("source is not a directory: %s", source)
+	}
+
+	dstInfo, err := os.Stat(destination)
+	dstExists := err == nil
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("cannot access destination %s: %w", destination, err)
+	}
+	if dstExists && !dstInfo.IsDir() {
+		return fmt.Errorf("destination is not a directory: %s", destination)
+	}
+	if dstExists && os.SameFile(srcInfo, dstInfo) {
+		return errSamePath
+	}
+
+	srcAbs, err := filepath.Abs(source)
+	if err != nil {
+		return fmt.Errorf("cannot resolve source %s: %w", source, err)
+	}
+	dstAbs, err := filepath.Abs(destination)
+	if err != nil {
+		return fmt.Errorf("cannot resolve destination %s: %w", destination, err)
+	}
+	switch {
+	case srcAbs == dstAbs:
+		return errSamePath
+	case isInside(srcAbs, dstAbs):
+		return errors.New("destination must not be inside source")
+	case isInside(dstAbs, srcAbs):
+		return errors.New("source must not be inside destination")
+	}
+	return nil
 }
 
 func isInside(parent, child string) bool {
-	relative, err := filepath.Rel(parent, child)
+	rel, err := filepath.Rel(parent, child)
 	if err != nil {
 		return false
 	}
-
-	if relative == "." || relative == ".." {
-		return false
-	}
-
-	return !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
