@@ -1,8 +1,6 @@
 # Dios
 
-Dios is a small command-line tool that synchronizes one directory into another, one way: `source → destination`. After a sync, the destination matches the source. The source is never modified.
-
-It is useful for keeping a backup or mirror folder up to date without copying everything again. Files that are already identical are left alone.
+Dios is a small command-line tool that synchronizes one directory into another, one way: `source → destination`. After a sync the destination matches the source. The source is never modified.
 
 ## Build
 
@@ -18,8 +16,6 @@ dios sync [--dry-run] <source> <destination>
 
 `--dry-run` can be placed anywhere among the arguments. It prints what a sync would do and changes nothing.
 
-Example:
-
 ```
 $ dios sync ./source ./destination
 Syncing:
@@ -31,22 +27,6 @@ Syncing:
 Sync completed.
 ```
 
-Dry run:
-
-```
-$ dios sync --dry-run ./source ./destination
-Dry run:
-
-  + config.txt
-  ~ documents/a.txt
-  + documents/b.txt
-  - old.txt
-
-No changes were made.
-```
-
-If nothing needs to change, Dios prints `Already synchronized.`.
-
 | Symbol | Meaning |
 |--------|---------|
 | `+`    | created or copied |
@@ -54,22 +34,34 @@ If nothing needs to change, Dios prints `Already synchronized.`.
 | `-`    | removed |
 | `!`    | skipped (symlinks and other special files in the source) |
 
-Directories are shown with a trailing `/`.
+Directories are shown with a trailing `/`. If nothing needs to change, Dios prints `Already synchronized.`.
 
-## Behavior
+Behavior:
 
-- Missing files and directories are created in the destination.
 - Files are compared by content and replaced only if they differ.
-- Files and directories that exist only in the destination are removed.
-- A file replaced by a directory (or the reverse) is reported as `~`.
+- Extra files and directories in the destination are removed.
 - Permissions and modification times of copied files are preserved.
-- Files are written through a temporary file and renamed, so an interrupted copy does not leave a half-written file.
-- Symlinks are never followed. A symlink in the destination is removed as a link, and a symlink in the source is skipped.
+- Symlinks are never followed. A symlink in the destination is removed as a link; a symlink in the source is skipped.
+- Source and destination must be different, and neither may be inside the other.
 - The destination is created if it does not exist.
-- The source and destination must be different, and neither may be inside the other.
-- Filesystem errors stop the sync and are printed as `Error: ...`. Changes already made are listed first.
 
-Exit codes: `0` on success, `1` on a runtime error, `2` on invalid usage.
+## Aliases
+
+Dios reads aliases from `.config/aliases` in the current directory. Each line is `name = "path"`:
+
+```
+# .config/aliases
+workspace1 = "C:/users/someone/projects"
+backup = "/mnt/backup"
+```
+
+```
+dios sync workspace1 backup
+```
+
+- Use `/` in paths, or wrap the path in backticks to keep backslashes: ``work = `C:\users\someone` ``.
+- Only arguments without `/` or `\` are looked up. `./workspace1` always means a real path.
+- A missing alias file is fine. A malformed one is an error that names the file and line.
 
 ## Development
 
@@ -79,5 +71,3 @@ go vet ./...
 go test ./...
 go build ./...
 ```
-
-Tests use temporary directories and check the resulting filesystem state, including dry-run, nested directories, replaced and removed entries, and error cases.
