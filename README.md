@@ -12,8 +12,8 @@ go build -o dios .
 
 ```
 dios init
-dios sync <source> <destination>
-dios check <source> <destination>
+dios sync [options] <source> <destination>
+dios check [options] <source> <destination>
 ```
 
 `init` creates the alias file (see [Aliases](#aliases)). `sync` makes the destination match the source. `check` shows what `sync` would do and changes nothing, with the reason for each difference.
@@ -50,6 +50,38 @@ Sync completed.
 | `!`    | skipped (symlinks and other special files in the source) |
 
 Directories are shown with a trailing `/`. If nothing needs to change, both commands print `Already synchronized.`. Run `check` before `sync` to see what would be deleted.
+
+## Options
+
+Options can be placed anywhere among the arguments.
+
+| Option | Commands | Effect |
+|--------|----------|--------|
+| `-s <name>`, `--skip <name>` | sync, check | Leave matching files and directories alone. Repeatable. |
+| `--pd`, `--prevent-delete` | sync, check | Create and update, but never delete anything from the destination. |
+| `--ns`, `--not-sure` | sync | Ask before every change. `y` or `Y` applies it, anything else skips it. |
+
+**`--skip`** takes exactly one value per use, so repeat it for several names: `dios sync src dst -s main.py -s readme.md`. A name without `/` matches at any depth (`main.py` matches `docs/main.py` too). A name with `/` is a path relative to the source root (`docs/main.py`). `*`, `?` and `[...]` patterns work (`*.log`). Skipped entries are not copied, updated or deleted, and a skipped directory is not entered. They are not listed in the output.
+
+**`--prevent-delete`** keeps files that exist only in the destination and lists them as `! name (kept: not in source)`. A change that would require deleting an existing entry, such as replacing a file with a directory, is skipped and listed with `!`.
+
+**`--not-sure`** shows each change with its reason and waits for an answer:
+
+```
+$ dios sync --ns src dst
++ config.txt  (missing in destination)  apply? [y/N] y
+~ documents/a.txt  (contents differ)  apply? [y/N] n
+- old.txt  (not in source)  apply? [y/N] y
+
+Syncing:
+  + config.txt
+  ! documents/a.txt (skipped by user)
+  - old.txt
+
+Sync completed.
+```
+
+Declining a new directory skips everything inside it. Closing the input (Ctrl+D, or Ctrl+Z then Enter on Windows) counts as "no" for all remaining changes. `check` never changes anything, so it does not accept `--ns`.
 
 Behavior:
 

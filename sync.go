@@ -44,17 +44,26 @@ func (c change) String() string {
 	return s
 }
 
+const needsDeleteNote = "skipped: needs delete, --prevent-delete is set"
+
+type options struct {
+	dryRun        bool
+	preventDelete bool
+	skip          []string
+	confirm       func(change) bool
+}
+
 type syncer struct {
-	dryRun  bool
+	opts    options
 	changes []change
 }
 
-func syncDirs(source, destination string, dryRun bool) ([]change, error) {
+func syncDirs(source, destination string, opts options) ([]change, error) {
 	if err := validatePaths(source, destination); err != nil {
 		return nil, err
 	}
 
-	s := &syncer{dryRun: dryRun}
+	s := &syncer{opts: opts}
 
 	_, err := os.Stat(destination)
 	dstExists := err == nil
@@ -62,20 +71,39 @@ func syncDirs(source, destination string, dryRun bool) ([]change, error) {
 		return nil, fmt.Errorf("cannot access destination %s: %w", destination, err)
 	}
 	if !dstExists {
-		if !dryRun {
+		c := change{kind: '+', path: ".", isDir: true, reason: "destination does not exist"}
+		if !s.approve(c) {
+			return s.changes, nil
+		}
+		if !opts.dryRun {
 			if err := os.MkdirAll(destination, 0o755); err != nil {
 				return nil, fmt.Errorf("cannot create destination %s: %w", destination, err)
 			}
 		}
-		s.record('+', ".", true, "destination does not exist")
+		s.add(c)
 	}
 
 	err = s.syncDir(source, destination, "", dstExists)
 	return s.changes, err
 }
 
-func (s *syncer) record(kind byte, rel string, isDir bool, reason string) {
-	s.changes = append(s.changes, change{kind: kind, path: rel, isDir: isDir, reason: reason})
+func (s *syncer) add(c change) {
+	s.changes = append(s.changes, c)
+}
+
+func (s *syncer) approve(c change) bool {
+	if s.opts.confirm == nil || s.opts.dryRun {
+		return true
+	}
+	if s.opts.confirm(c) {
+		return true
+	}
+	s.add(change{kind: '!', path: c.path, isDir: c.isDir, note: "skipped by user"})
+	return false
+}
+
+func (s *syncer) skipped(rel string) bool {
+	return matchesSkip(s.opts.skip, rel)
 }
 
 func (s *syncer) syncDir(srcDir, dstDir, rel string, dstExists bool) error {
@@ -101,7 +129,11 @@ func (s *syncer) syncDir(srcDir, dstDir, rel string, dstExists bool) error {
 	for _, srcEntry := range srcEntries {
 		name := srcEntry.Name()
 		inSource[name] = true
-		err := s.syncEntry(srcEntry, dstByName[name], filepath.Join(srcDir, name), filepath.Join(dstDir, name), path.Join(rel, name))
+		relPath := path.Join(rel, name)
+		if s.skipped(relPath) {
+			continue
+		}
+		err := s.syncEntry(srcEntry, dstByName[name], filepath.Join(srcDir, name), filepath.Join(dstDir, name), relPath)
 		if err != nil {
 			return err
 		}
@@ -113,10 +145,21 @@ func (s *syncer) syncDir(srcDir, dstDir, rel string, dstExists bool) error {
 			continue
 		}
 		relPath := path.Join(rel, name)
+		if s.skipped(relPath) {
+			continue
+		}
+		if s.opts.preventDelete {
+			s.add(change{kind: '!', path: relPath, isDir: dstEntry.IsDir(), note: "kept: not in source"})
+			continue
+		}
+		c := change{kind: '-', path: relPath, isDir: dstEntry.IsDir(), reason: "not in source"}
+		if !s.approve(c) {
+			continue
+		}
 		if err := s.removeDst(filepath.Join(dstDir, name), relPath); err != nil {
 			return err
 		}
-		s.record('-', relPath, dstEntry.IsDir(), "not in source")
+		s.add(c)
 	}
 	return nil
 }
@@ -133,30 +176,39 @@ func (s *syncer) syncEntry(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel
 		if typ&fs.ModeSymlink != 0 {
 			note = "skipped: symlink"
 		}
-		s.changes = append(s.changes, change{kind: '!', path: rel, note: note})
+		s.add(change{kind: '!', path: rel, note: note})
 		return nil
 	}
 }
 
 func (s *syncer) syncSubdir(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel string) error {
 	dstExists := dstEntry != nil
-	kind := byte('+')
-	reason := "missing in destination"
+	replace := dstExists && !dstEntry.IsDir()
+	c := change{kind: '+', path: rel, isDir: true, reason: "missing in destination"}
 
-	if dstExists && !dstEntry.IsDir() {
-		if err := s.removeDst(dstPath, rel); err != nil {
-			return err
+	if replace {
+		if s.opts.preventDelete {
+			s.add(change{kind: '!', path: rel, isDir: true, note: needsDeleteNote})
+			return nil
+		}
+		c.kind = '~'
+		c.reason = "destination is not a directory, source is a directory"
+		if dstEntry.Type().IsRegular() {
+			c.reason = "destination is a file, source is a directory"
 		}
 		dstExists = false
-		kind = '~'
-		reason = "destination is not a directory, source is a directory"
-		if dstEntry.Type().IsRegular() {
-			reason = "destination is a file, source is a directory"
-		}
 	}
 
 	if !dstExists {
-		if !s.dryRun {
+		if !s.approve(c) {
+			return nil
+		}
+		if replace {
+			if err := s.removeDst(dstPath, rel); err != nil {
+				return err
+			}
+		}
+		if !s.opts.dryRun {
 			info, err := srcEntry.Info()
 			if err != nil {
 				return fmt.Errorf("cannot stat source directory %s: %w", srcPath, err)
@@ -165,7 +217,7 @@ func (s *syncer) syncSubdir(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, re
 				return fmt.Errorf("cannot create directory %s: %w", rel, err)
 			}
 		}
-		s.record(kind, rel, true, reason)
+		s.add(c)
 	}
 
 	return s.syncDir(srcPath, dstPath, rel, dstExists)
@@ -177,10 +229,10 @@ func (s *syncer) syncFile(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel 
 		return fmt.Errorf("cannot stat source file %s: %w", srcPath, err)
 	}
 
-	kind := byte('+')
-	reason := "missing in destination"
+	c := change{kind: '+', path: rel, reason: "missing in destination"}
+	replace := false
 	if dstEntry != nil {
-		kind = '~'
+		c.kind = '~'
 		if dstEntry.Type().IsRegular() {
 			dstInfo, err := dstEntry.Info()
 			if err != nil {
@@ -193,35 +245,71 @@ func (s *syncer) syncFile(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel 
 			if same {
 				return nil
 			}
-			reason = "contents differ"
+			c.reason = "contents differ"
 		} else {
-			if err := s.removeDst(dstPath, rel); err != nil {
-				return err
+			if s.opts.preventDelete {
+				s.add(change{kind: '!', path: rel, note: needsDeleteNote})
+				return nil
 			}
-			reason = "destination is not a regular file, source is a file"
+			replace = true
+			c.reason = "destination is not a regular file, source is a file"
 			if dstEntry.IsDir() {
-				reason = "destination is a directory, source is a file"
+				c.reason = "destination is a directory, source is a file"
 			}
 		}
 	}
 
-	if !s.dryRun {
+	if !s.approve(c) {
+		return nil
+	}
+	if replace {
+		if err := s.removeDst(dstPath, rel); err != nil {
+			return err
+		}
+	}
+	if !s.opts.dryRun {
 		if err := copyFile(srcPath, dstPath, srcInfo); err != nil {
 			return fmt.Errorf("cannot copy %s: %w", rel, err)
 		}
 	}
-	s.record(kind, rel, false, reason)
+	s.add(c)
 	return nil
 }
 
 func (s *syncer) removeDst(dstPath, rel string) error {
-	if s.dryRun {
+	if s.opts.dryRun {
 		return nil
 	}
 	if err := os.RemoveAll(dstPath); err != nil {
 		return fmt.Errorf("cannot remove %s: %w", rel, err)
 	}
 	return nil
+}
+
+func normalizeSkip(pattern string) (string, error) {
+	p := filepath.ToSlash(pattern)
+	p = strings.TrimPrefix(p, "./")
+	p = strings.TrimSuffix(p, "/")
+	if p == "" {
+		return "", errors.New("skip pattern is empty")
+	}
+	if _, err := path.Match(p, ""); err != nil {
+		return "", fmt.Errorf("invalid skip pattern %q: %w", pattern, err)
+	}
+	return p, nil
+}
+
+func matchesSkip(patterns []string, rel string) bool {
+	for _, p := range patterns {
+		target := path.Base(rel)
+		if strings.Contains(p, "/") {
+			target = rel
+		}
+		if ok, _ := path.Match(p, target); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func sameContent(a, b string, aInfo, bInfo fs.FileInfo) (bool, error) {

@@ -94,7 +94,7 @@ func TestRunInit(t *testing.T) {
 	chdir(t, root)
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"init"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"init"}, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, stderr: %q", code, stderr.String())
 	}
 	if want := "Created " + aliasFile + "\n"; stdout.String() != want {
@@ -110,7 +110,7 @@ func TestRunInit(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"init"}, &stdout, &stderr); code != 1 {
+	if code := run([]string{"init"}, nil, &stdout, &stderr); code != 1 {
 		t.Errorf("second init: exit code = %d, want 1", code)
 	}
 	if want := "Error: already initialized: " + aliasFile + " exists"; !bytes.Contains(stderr.Bytes(), []byte(want)) {
@@ -126,7 +126,7 @@ func TestRunInitWithArguments(t *testing.T) {
 	chdir(t, root)
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"init", "extra"}, &stdout, &stderr); code != 2 {
+	if code := run([]string{"init", "extra"}, nil, &stdout, &stderr); code != 2 {
 		t.Errorf("exit code = %d, want 2", code)
 	}
 	if want := "Error: init takes no arguments"; !bytes.Contains(stderr.Bytes(), []byte(want)) {
@@ -145,7 +145,7 @@ func TestInitThenUseAlias(t *testing.T) {
 	writeFile(t, filepath.Join(src, "a.txt"), "a")
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"init"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"init"}, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("init: exit code %d, stderr: %q", code, stderr.String())
 	}
 
@@ -154,7 +154,7 @@ func TestInitThenUseAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if code := run([]string{"sync", "one", "two"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"sync", "one", "two"}, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("sync: exit code %d, stderr: %q", code, stderr.String())
 	}
 	assertTree(t, "destination", snapshot(t, dst), map[string]string{"a.txt": "a"})

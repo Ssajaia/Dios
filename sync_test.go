@@ -138,7 +138,7 @@ func TestSync(t *testing.T) {
 			srcBefore := snapshot(t, src)
 			dstBefore := snapshot(t, dst)
 
-			changes, err := syncDirs(src, dst, true)
+			changes, err := syncDirs(src, dst, options{dryRun: true})
 			if err != nil {
 				t.Fatalf("dry run: %v", err)
 			}
@@ -146,7 +146,7 @@ func TestSync(t *testing.T) {
 			assertTree(t, "source after dry run", snapshot(t, src), srcBefore)
 			assertTree(t, "destination after dry run", snapshot(t, dst), dstBefore)
 
-			changes, err = syncDirs(src, dst, false)
+			changes, err = syncDirs(src, dst, options{})
 			if err != nil {
 				t.Fatalf("sync: %v", err)
 			}
@@ -154,7 +154,7 @@ func TestSync(t *testing.T) {
 			assertTree(t, "source after sync", snapshot(t, src), srcBefore)
 			assertTree(t, "destination after sync", snapshot(t, dst), srcBefore)
 
-			changes, err = syncDirs(src, dst, false)
+			changes, err = syncDirs(src, dst, options{})
 			if err != nil {
 				t.Fatalf("second sync: %v", err)
 			}
@@ -199,7 +199,7 @@ func TestSyncErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			src, dst := tt.setup(t, t.TempDir())
-			changes, err := syncDirs(src, dst, false)
+			changes, err := syncDirs(src, dst, options{})
 			checkErr(t, err, tt.wantErr)
 			if len(changes) != 0 {
 				t.Errorf("changes = %v, want none", changes)
@@ -223,7 +223,7 @@ func TestSyncPreservesMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := syncDirs(src, dst, false); err != nil {
+	if _, err := syncDirs(src, dst, options{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,7 +246,7 @@ func TestSyncLeavesNoTempFiles(t *testing.T) {
 	build(t, src, map[string]string{"a.txt": "new", "d/b.txt": "b"})
 	build(t, dst, map[string]string{"a.txt": "old"})
 
-	if _, err := syncDirs(src, dst, false); err != nil {
+	if _, err := syncDirs(src, dst, options{}); err != nil {
 		t.Fatal(err)
 	}
 	for name := range snapshot(t, dst) {
@@ -267,7 +267,7 @@ func TestSyncSkipsSourceSymlink(t *testing.T) {
 		t.Skipf("symlinks not supported: %v", err)
 	}
 
-	changes, err := syncDirs(src, dst, false)
+	changes, err := syncDirs(src, dst, options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestSyncRemovesDestinationSymlinkWithoutFollowing(t *testing.T) {
 		t.Skipf("symlinks not supported: %v", err)
 	}
 
-	changes, err := syncDirs(src, dst, false)
+	changes, err := syncDirs(src, dst, options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,35 +406,6 @@ func TestValidatePathsSymlinkToSource(t *testing.T) {
 	checkErr(t, validatePaths(src, link), "must be different paths")
 }
 
-func TestParsePaths(t *testing.T) {
-	tests := []struct {
-		name      string
-		args      []string
-		wantPaths []string
-		wantErr   string
-	}{
-		{name: "two paths", args: []string{"a", "b"}, wantPaths: []string{"a", "b"}},
-		{name: "no arguments", args: nil, wantErr: "expected <source> and <destination>"},
-		{name: "one path", args: []string{"a"}, wantErr: "expected <source> and <destination>"},
-		{name: "three paths", args: []string{"a", "b", "c"}, wantErr: "expected <source> and <destination>"},
-		{name: "unknown option", args: []string{"--force", "a", "b"}, wantErr: "unknown option: --force"},
-		{name: "dry-run is no longer an option", args: []string{"--dry-run", "a", "b"}, wantErr: "unknown option: --dry-run"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			src, dst, err := parsePaths(tt.args)
-			checkErr(t, err, tt.wantErr)
-			if tt.wantErr != "" {
-				return
-			}
-			if got := []string{src, dst}; !reflect.DeepEqual(got, tt.wantPaths) {
-				t.Errorf("paths = %v, want %v", got, tt.wantPaths)
-			}
-		})
-	}
-}
-
 func TestRun(t *testing.T) {
 	root := t.TempDir()
 	chdir(t, root)
@@ -463,7 +434,7 @@ func TestRun(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := run(tt.args, &stdout, &stderr)
+			code := run(tt.args, nil, &stdout, &stderr)
 			if code != tt.wantCode {
 				t.Errorf("exit code = %d, want %d (stderr: %q)", code, tt.wantCode, stderr.String())
 			}
@@ -506,7 +477,7 @@ func TestRunOutput(t *testing.T) {
 
 	for i, step := range steps {
 		var stdout, stderr bytes.Buffer
-		if code := run(step.args, &stdout, &stderr); code != 0 {
+		if code := run(step.args, nil, &stdout, &stderr); code != 0 {
 			t.Fatalf("%s: exit code %d, stderr: %q", step.name, code, stderr.String())
 		}
 		if stdout.String() != step.want {
@@ -542,7 +513,7 @@ func TestCheckReasons(t *testing.T) {
 		"sub/gone/":   "",
 	})
 
-	changes, err := syncDirs(src, dst, true)
+	changes, err := syncDirs(src, dst, options{dryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -163,13 +163,13 @@ func TestRunWithAliases(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	if code := run([]string{"check", "one", "two"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"check", "one", "two"}, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("check: exit code %d, stderr: %q", code, stderr.String())
 	}
 	assertTree(t, "destination after check", snapshot(t, dst), nil)
 
 	stdout.Reset()
-	if code := run([]string{"sync", "one", "two"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"sync", "one", "two"}, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("sync: exit code %d, stderr: %q", code, stderr.String())
 	}
 	assertTree(t, "destination after sync", snapshot(t, dst), map[string]string{"a.txt": "a"})
@@ -181,7 +181,7 @@ func TestRunAliasWithSeparatorIsNotResolved(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".config", "aliases"), fmt.Sprintf("one = %q\n", mkdir(t, root, "real")))
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"sync", "./one", "dst"}, &stdout, &stderr)
+	code := run([]string{"sync", "./one", "dst"}, nil, &stdout, &stderr)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
@@ -196,7 +196,7 @@ func TestRunWithInvalidAliasFile(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".config", "aliases"), "broken line\n")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"sync", "a", "b"}, &stdout, &stderr)
+	code := run([]string{"sync", "a", "b"}, nil, &stdout, &stderr)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
