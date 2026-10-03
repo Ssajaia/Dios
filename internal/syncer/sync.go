@@ -556,17 +556,16 @@ func checkDirectoryCaseSafety(root string) error {
 	}
 	seen := make(map[string]string, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
-			if err := checkDirectoryCaseSafety(filepath.Join(root, entry.Name())); err != nil {
-				return err
-			}
-			continue
-		}
 		key := strings.ToLower(entry.Name())
 		if prev, ok := seen[key]; ok {
 			return fmt.Errorf("case-insensitive name collision: %s and %s", prev, entry.Name())
 		}
 		seen[key] = entry.Name()
+		if entry.IsDir() {
+			if err := checkDirectoryCaseSafety(filepath.Join(root, entry.Name())); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

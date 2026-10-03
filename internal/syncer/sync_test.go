@@ -197,7 +197,7 @@ func TestCleanupTrackedTempFiles(t *testing.T) {
 	}
 }
 
-func TestSyncRejectsCaseCollisionsOnCaseSensitiveFilesystems(t *testing.T) {
+func TestCheckDirectoryCaseSafetyRejectsCaseCollisions(t *testing.T) {
 	root := t.TempDir()
 	if isCaseInsensitiveFS(root) {
 		t.Skip("case-insensitive filesystem; collision cannot be represented")
@@ -212,7 +212,7 @@ func TestSyncRejectsCaseCollisionsOnCaseSensitiveFilesystems(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := ensureCaseSafe(src, filepath.Join(root, "dst")); err == nil {
+	if err := checkDirectoryCaseSafety(src); err == nil {
 		t.Fatal("expected case-insensitive collision detection")
 	}
 }
