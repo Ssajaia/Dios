@@ -1,33 +1,22 @@
-# Binaries
-/bin/
-/dist/
-
-# Go build/test artifacts
+# Build artifacts
+/dios
+/dios.exe
 *.exe
-*.exe~
-*.dll
-*.so
-*.dylib
 *.test
 *.out
 
-# Coverage
-coverage.out
-coverage.html
+# Local alias configuration
+.config/
 
-# IDE / editor
-.vscode/
+# IDE
 .idea/
+.vscode/
+*.swp
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
 
-# Local environment / secrets
+# Local environment
 .env
 .env.*
-
-# Temporary files
-*.tmp
-*.temp
-*.swp

@@ -1,7 +1,6 @@
-package main
+package syncer
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ssajaia/dios/internal/testutil"
 )
 
 func TestSync(t *testing.T) {
@@ -133,28 +134,28 @@ func TestSync(t *testing.T) {
 			root := t.TempDir()
 			src := filepath.Join(root, "src")
 			dst := filepath.Join(root, "dst")
-			build(t, src, tt.src)
-			build(t, dst, tt.dst)
-			srcBefore := snapshot(t, src)
-			dstBefore := snapshot(t, dst)
+			testutil.Build(t, src, tt.src)
+			testutil.Build(t, dst, tt.dst)
+			srcBefore := testutil.Snapshot(t, src)
+			dstBefore := testutil.Snapshot(t, dst)
 
-			changes, err := syncDirs(src, dst, options{dryRun: true})
+			changes, err := Sync(src, dst, Options{DryRun: true})
 			if err != nil {
 				t.Fatalf("dry run: %v", err)
 			}
 			assertChanges(t, "dry run", changes, tt.want)
-			assertTree(t, "source after dry run", snapshot(t, src), srcBefore)
-			assertTree(t, "destination after dry run", snapshot(t, dst), dstBefore)
+			testutil.AssertTree(t, "source after dry run", testutil.Snapshot(t, src), srcBefore)
+			testutil.AssertTree(t, "destination after dry run", testutil.Snapshot(t, dst), dstBefore)
 
-			changes, err = syncDirs(src, dst, options{})
+			changes, err = Sync(src, dst, Options{})
 			if err != nil {
 				t.Fatalf("sync: %v", err)
 			}
 			assertChanges(t, "sync", changes, tt.want)
-			assertTree(t, "source after sync", snapshot(t, src), srcBefore)
-			assertTree(t, "destination after sync", snapshot(t, dst), srcBefore)
+			testutil.AssertTree(t, "source after sync", testutil.Snapshot(t, src), srcBefore)
+			testutil.AssertTree(t, "destination after sync", testutil.Snapshot(t, dst), srcBefore)
 
-			changes, err = syncDirs(src, dst, options{})
+			changes, err = Sync(src, dst, Options{})
 			if err != nil {
 				t.Fatalf("second sync: %v", err)
 			}
@@ -180,7 +181,7 @@ func TestSyncErrors(t *testing.T) {
 			name: "source is a file",
 			setup: func(t *testing.T, root string) (string, string) {
 				src := filepath.Join(root, "file.txt")
-				writeFile(t, src, "x")
+				testutil.WriteFile(t, src, "x")
 				return src, filepath.Join(root, "dst")
 			},
 			wantErr: "source is not a directory",
@@ -189,8 +190,8 @@ func TestSyncErrors(t *testing.T) {
 			name: "destination is a file",
 			setup: func(t *testing.T, root string) (string, string) {
 				dst := filepath.Join(root, "dst.txt")
-				writeFile(t, dst, "x")
-				return mkdir(t, root, "src"), dst
+				testutil.WriteFile(t, dst, "x")
+				return testutil.Mkdir(t, root, "src"), dst
 			},
 			wantErr: "destination is not a directory",
 		},
@@ -199,8 +200,8 @@ func TestSyncErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			src, dst := tt.setup(t, t.TempDir())
-			changes, err := syncDirs(src, dst, options{})
-			checkErr(t, err, tt.wantErr)
+			changes, err := Sync(src, dst, Options{})
+			testutil.CheckErr(t, err, tt.wantErr)
 			if len(changes) != 0 {
 				t.Errorf("changes = %v, want none", changes)
 			}
@@ -212,7 +213,7 @@ func TestSyncPreservesMetadata(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "src")
 	dst := filepath.Join(root, "dst")
-	build(t, src, map[string]string{"a.txt": "data"})
+	testutil.Build(t, src, map[string]string{"a.txt": "data"})
 
 	mtime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
 	file := filepath.Join(src, "a.txt")
@@ -223,7 +224,7 @@ func TestSyncPreservesMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := syncDirs(src, dst, options{}); err != nil {
+	if _, err := Sync(src, dst, Options{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -243,13 +244,13 @@ func TestSyncLeavesNoTempFiles(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "src")
 	dst := filepath.Join(root, "dst")
-	build(t, src, map[string]string{"a.txt": "new", "d/b.txt": "b"})
-	build(t, dst, map[string]string{"a.txt": "old"})
+	testutil.Build(t, src, map[string]string{"a.txt": "new", "d/b.txt": "b"})
+	testutil.Build(t, dst, map[string]string{"a.txt": "old"})
 
-	if _, err := syncDirs(src, dst, options{}); err != nil {
+	if _, err := Sync(src, dst, Options{}); err != nil {
 		t.Fatal(err)
 	}
-	for name := range snapshot(t, dst) {
+	for name := range testutil.Snapshot(t, dst) {
 		if strings.Contains(name, ".dios-tmp-") {
 			t.Errorf("temp file left behind: %s", name)
 		}
@@ -261,13 +262,13 @@ func TestSyncSkipsSourceSymlink(t *testing.T) {
 	src := filepath.Join(root, "src")
 	dst := filepath.Join(root, "dst")
 	outside := filepath.Join(root, "outside.txt")
-	writeFile(t, outside, "outside")
-	build(t, src, map[string]string{"a.txt": "a"})
+	testutil.WriteFile(t, outside, "outside")
+	testutil.Build(t, src, map[string]string{"a.txt": "a"})
 	if err := os.Symlink(outside, filepath.Join(src, "link")); err != nil {
 		t.Skipf("symlinks not supported: %v", err)
 	}
 
-	changes, err := syncDirs(src, dst, options{})
+	changes, err := Sync(src, dst, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,16 +280,16 @@ func TestSyncSkipsSourceSymlink(t *testing.T) {
 
 func TestSyncRemovesDestinationSymlinkWithoutFollowing(t *testing.T) {
 	root := t.TempDir()
-	src := mkdir(t, root, "src")
-	dst := mkdir(t, root, "dst")
-	outside := mkdir(t, root, "outside")
+	src := testutil.Mkdir(t, root, "src")
+	dst := testutil.Mkdir(t, root, "dst")
+	outside := testutil.Mkdir(t, root, "outside")
 	keep := filepath.Join(outside, "keep.txt")
-	writeFile(t, keep, "keep")
+	testutil.WriteFile(t, keep, "keep")
 	if err := os.Symlink(outside, filepath.Join(dst, "link")); err != nil {
 		t.Skipf("symlinks not supported: %v", err)
 	}
 
-	changes, err := syncDirs(src, dst, options{})
+	changes, err := Sync(src, dst, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +321,7 @@ func TestValidatePaths(t *testing.T) {
 			name: "source is a file",
 			setup: func(t *testing.T, root string) (string, string) {
 				src := filepath.Join(root, "file.txt")
-				writeFile(t, src, "x")
+				testutil.WriteFile(t, src, "x")
 				return src, filepath.Join(root, "dst")
 			},
 			wantErr: "source is not a directory",
@@ -328,7 +329,7 @@ func TestValidatePaths(t *testing.T) {
 		{
 			name: "same path",
 			setup: func(t *testing.T, root string) (string, string) {
-				src := mkdir(t, root, "src")
+				src := testutil.Mkdir(t, root, "src")
 				return src, src
 			},
 			wantErr: "must be different paths",
@@ -336,7 +337,7 @@ func TestValidatePaths(t *testing.T) {
 		{
 			name: "same path with different spelling",
 			setup: func(t *testing.T, root string) (string, string) {
-				src := mkdir(t, root, "src")
+				src := testutil.Mkdir(t, root, "src")
 				return src, src + sep + "."
 			},
 			wantErr: "must be different paths",
@@ -344,7 +345,7 @@ func TestValidatePaths(t *testing.T) {
 		{
 			name: "destination inside source",
 			setup: func(t *testing.T, root string) (string, string) {
-				src := mkdir(t, root, "src")
+				src := testutil.Mkdir(t, root, "src")
 				return src, filepath.Join(src, "dst")
 			},
 			wantErr: "destination must not be inside source",
@@ -352,8 +353,8 @@ func TestValidatePaths(t *testing.T) {
 		{
 			name: "source inside destination",
 			setup: func(t *testing.T, root string) (string, string) {
-				dst := mkdir(t, root, "dst")
-				src := mkdir(t, dst, "src")
+				dst := testutil.Mkdir(t, root, "dst")
+				src := testutil.Mkdir(t, dst, "src")
 				return src, dst
 			},
 			wantErr: "source must not be inside destination",
@@ -361,9 +362,9 @@ func TestValidatePaths(t *testing.T) {
 		{
 			name: "destination is a file",
 			setup: func(t *testing.T, root string) (string, string) {
-				src := mkdir(t, root, "src")
+				src := testutil.Mkdir(t, root, "src")
 				dst := filepath.Join(root, "dst.txt")
-				writeFile(t, dst, "x")
+				testutil.WriteFile(t, dst, "x")
 				return src, dst
 			},
 			wantErr: "destination is not a directory",
@@ -371,19 +372,19 @@ func TestValidatePaths(t *testing.T) {
 		{
 			name: "missing destination",
 			setup: func(t *testing.T, root string) (string, string) {
-				return mkdir(t, root, "src"), filepath.Join(root, "dst")
+				return testutil.Mkdir(t, root, "src"), filepath.Join(root, "dst")
 			},
 		},
 		{
 			name: "existing destination",
 			setup: func(t *testing.T, root string) (string, string) {
-				return mkdir(t, root, "src"), mkdir(t, root, "dst")
+				return testutil.Mkdir(t, root, "src"), testutil.Mkdir(t, root, "dst")
 			},
 		},
 		{
 			name: "sibling directories with common prefix",
 			setup: func(t *testing.T, root string) (string, string) {
-				return mkdir(t, root, "data"), mkdir(t, root, "data-backup")
+				return testutil.Mkdir(t, root, "data"), testutil.Mkdir(t, root, "data-backup")
 			},
 		},
 	}
@@ -391,111 +392,26 @@ func TestValidatePaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			src, dst := tt.setup(t, t.TempDir())
-			checkErr(t, validatePaths(src, dst), tt.wantErr)
+			testutil.CheckErr(t, validatePaths(src, dst), tt.wantErr)
 		})
 	}
 }
 
 func TestValidatePathsSymlinkToSource(t *testing.T) {
 	root := t.TempDir()
-	src := mkdir(t, root, "src")
+	src := testutil.Mkdir(t, root, "src")
 	link := filepath.Join(root, "link")
 	if err := os.Symlink(src, link); err != nil {
 		t.Skipf("symlinks not supported: %v", err)
 	}
-	checkErr(t, validatePaths(src, link), "must be different paths")
-}
-
-func TestRun(t *testing.T) {
-	root := t.TempDir()
-	chdir(t, root)
-	src := mkdir(t, root, "src")
-	missing := filepath.Join(root, "missing")
-	dst := filepath.Join(root, "dst")
-
-	tests := []struct {
-		name       string
-		args       []string
-		wantCode   int
-		wantStderr string
-	}{
-		{name: "no command", args: nil, wantCode: 2, wantStderr: "Error: missing command"},
-		{name: "unknown command", args: []string{"copy"}, wantCode: 2, wantStderr: "Error: unknown command: copy"},
-		{name: "wrong argument count", args: []string{"sync", "a"}, wantCode: 2, wantStderr: "Error: expected"},
-		{name: "unknown option", args: []string{"sync", "--force", "a", "b"}, wantCode: 2, wantStderr: "Error: unknown option"},
-		{name: "sync no longer accepts dry-run", args: []string{"sync", "--dry-run", "a", "b"}, wantCode: 2, wantStderr: "Error: unknown option: --dry-run"},
-		{name: "check wrong argument count", args: []string{"check", "a"}, wantCode: 2, wantStderr: "Error: expected"},
-		{name: "check missing source", args: []string{"check", missing, dst}, wantCode: 1, wantStderr: "Error: source does not exist: " + missing},
-		{name: "missing source", args: []string{"sync", missing, dst}, wantCode: 1, wantStderr: "Error: source does not exist: " + missing},
-		{name: "valid", args: []string{"sync", src, dst}, wantCode: 0},
-		{name: "valid check", args: []string{"check", src, dst}, wantCode: 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			code := run(tt.args, nil, &stdout, &stderr)
-			if code != tt.wantCode {
-				t.Errorf("exit code = %d, want %d (stderr: %q)", code, tt.wantCode, stderr.String())
-			}
-			if !strings.Contains(stderr.String(), tt.wantStderr) {
-				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantStderr)
-			}
-			if tt.wantCode == 0 && stderr.Len() != 0 {
-				t.Errorf("unexpected stderr: %q", stderr.String())
-			}
-		})
-	}
-}
-
-func TestRunOutput(t *testing.T) {
-	root := t.TempDir()
-	chdir(t, root)
-	src := mkdir(t, root, "src")
-	dst := mkdir(t, root, "dst")
-	writeFile(t, filepath.Join(src, "a.txt"), "a")
-	writeFile(t, filepath.Join(dst, "old.txt"), "old")
-
-	header := "Checking " + src + " -> " + dst + "\n\n"
-	checkWant := header +
-		"  + a.txt    missing in destination\n" +
-		"  - old.txt  not in source\n" +
-		"\nSummary: 1 to create, 1 to remove.\n" +
-		"No changes were made.\n"
-
-	steps := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{name: "check", args: []string{"check", src, dst}, want: checkWant},
-		{name: "check again gives the same result", args: []string{"check", src, dst}, want: checkWant},
-		{name: "sync", args: []string{"sync", src, dst}, want: "Syncing:\n  + a.txt\n  - old.txt\n\nSync completed.\n"},
-		{name: "already synchronized", args: []string{"sync", src, dst}, want: "Already synchronized.\n"},
-		{name: "check when synchronized", args: []string{"check", src, dst}, want: header + "Already synchronized.\n"},
-	}
-
-	for i, step := range steps {
-		var stdout, stderr bytes.Buffer
-		if code := run(step.args, nil, &stdout, &stderr); code != 0 {
-			t.Fatalf("%s: exit code %d, stderr: %q", step.name, code, stderr.String())
-		}
-		if stdout.String() != step.want {
-			t.Errorf("%s: stdout = %q, want %q", step.name, stdout.String(), step.want)
-		}
-		if i < 2 {
-			assertTree(t, step.name+": destination", snapshot(t, dst), map[string]string{"old.txt": "old"})
-		}
-	}
-
-	assertTree(t, "destination", snapshot(t, dst), map[string]string{"a.txt": "a"})
+	testutil.CheckErr(t, validatePaths(src, link), "must be different paths")
 }
 
 func TestCheckReasons(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "src")
 	dst := filepath.Join(root, "dst")
-	build(t, src, map[string]string{
+	testutil.Build(t, src, map[string]string{
 		"chg.txt":     "1",
 		"dirx/f.txt":  "1",
 		"new.txt":     "n",
@@ -503,7 +419,7 @@ func TestCheckReasons(t *testing.T) {
 		"same.txt":    "s",
 		"sub/inner/z": "z",
 	})
-	build(t, dst, map[string]string{
+	testutil.Build(t, dst, map[string]string{
 		"chg.txt":     "2",
 		"dirx":        "file",
 		"t/x":         "x",
@@ -513,14 +429,14 @@ func TestCheckReasons(t *testing.T) {
 		"sub/gone/":   "",
 	})
 
-	changes, err := syncDirs(src, dst, options{dryRun: true})
+	changes, err := Sync(src, dst, Options{DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var got []string
 	for _, c := range changes {
-		got = append(got, fmt.Sprintf("%c %s: %s", c.kind, c.label(), c.detail()))
+		got = append(got, fmt.Sprintf("%c %s: %s", c.Kind, c.Label(), c.Detail()))
 	}
 	want := []string{
 		"~ chg.txt: contents differ",
@@ -536,83 +452,7 @@ func TestCheckReasons(t *testing.T) {
 	}
 }
 
-func build(t *testing.T, root string, tree map[string]string) {
-	t.Helper()
-	if tree == nil {
-		return
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range tree {
-		full := filepath.Join(root, filepath.FromSlash(name))
-		if strings.HasSuffix(name, "/") {
-			if err := os.MkdirAll(full, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			continue
-		}
-		writeFile(t, full, content)
-	}
-}
-
-func snapshot(t *testing.T, root string) map[string]string {
-	t.Helper()
-	if _, err := os.Lstat(root); errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	tree := make(map[string]string)
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		if d.IsDir() {
-			tree[rel+"/"] = ""
-			return nil
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		tree[rel] = string(data)
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tree
-}
-
-func assertTree(t *testing.T, what string, got, want map[string]string) {
-	t.Helper()
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("%s:\n got  %v\n want %v", what, abbreviate(got), abbreviate(want))
-	}
-}
-
-func abbreviate(tree map[string]string) map[string]string {
-	if tree == nil {
-		return nil
-	}
-	out := make(map[string]string, len(tree))
-	for k, v := range tree {
-		if len(v) > 20 {
-			v = v[:20] + "..."
-		}
-		out[k] = v
-	}
-	return out
-}
-
-func assertChanges(t *testing.T, what string, got []change, want []string) {
+func assertChanges(t *testing.T, what string, got []Change, want []string) {
 	t.Helper()
 	var gotStrings []string
 	for _, c := range got {
@@ -620,56 +460,5 @@ func assertChanges(t *testing.T, what string, got []change, want []string) {
 	}
 	if !reflect.DeepEqual(gotStrings, want) {
 		t.Errorf("%s changes = %v, want %v", what, gotStrings, want)
-	}
-}
-
-func mkdir(t *testing.T, parent, name string) string {
-	t.Helper()
-	p := filepath.Join(parent, name)
-	if err := os.MkdirAll(p, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
-func writeFile(t *testing.T, p, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func chdir(t *testing.T, dir string) {
-	t.Helper()
-	old, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(old); err != nil {
-			t.Error(err)
-		}
-	})
-}
-
-func checkErr(t *testing.T, err error, want string) {
-	t.Helper()
-	if want == "" {
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		return
-	}
-	if err == nil {
-		t.Fatalf("expected error containing %q, got nil", want)
-	}
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("error = %q, want it to contain %q", err.Error(), want)
 	}
 }

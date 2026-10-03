@@ -1,4 +1,5 @@
-package main
+// Package alias reads and creates the file that maps short names to directories.
+package alias
 
 import (
 	"bufio"
@@ -10,7 +11,8 @@ import (
 	"strings"
 )
 
-func loadAliases(file string) (map[string]string, error) {
+// Load reads aliases from file. A missing file yields no aliases.
+func Load(file string) (map[string]string, error) {
 	f, err := os.Open(file)
 	if errors.Is(err, fs.ErrNotExist) {
 		return map[string]string{}, nil
@@ -67,7 +69,8 @@ func parseAliasLine(line string) (string, string, error) {
 	return name, value, nil
 }
 
-func resolvePath(arg string, aliases map[string]string) string {
+// Resolve returns the target of arg if it is an alias name, otherwise arg.
+func Resolve(arg string, aliases map[string]string) string {
 	if strings.ContainsAny(arg, `/\`) {
 		return arg
 	}

@@ -1,4 +1,4 @@
-package main
+package alias
 
 import (
 	"errors"
@@ -8,7 +8,8 @@ import (
 	"path/filepath"
 )
 
-const aliasTemplate = `# Dios aliases
+// Template is the content of a newly initialized alias file.
+const Template = `# Dios aliases
 # One alias per line: name = "path"
 # Use / in paths, or wrap the path in backticks to keep backslashes.
 #
@@ -16,7 +17,9 @@ const aliasTemplate = `# Dios aliases
 # backup = "D:/backup"
 `
 
-func initAliases(file string) error {
+// Init creates file, and its directory, with the alias template.
+// It fails if file already exists.
+func Init(file string) error {
 	dir := filepath.Dir(file)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("cannot create directory %s: %w", dir, err)
@@ -30,7 +33,7 @@ func initAliases(file string) error {
 		return fmt.Errorf("cannot create %s: %w", file, err)
 	}
 
-	if _, err := f.WriteString(aliasTemplate); err != nil {
+	if _, err := f.WriteString(Template); err != nil {
 		f.Close()
 		os.Remove(file)
 		return fmt.Errorf("cannot write %s: %w", file, err)

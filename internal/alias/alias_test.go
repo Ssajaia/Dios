@@ -1,11 +1,11 @@
-package main
+package alias
 
 import (
-	"bytes"
-	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/ssajaia/dios/internal/testutil"
 )
 
 func TestLoadAliases(t *testing.T) {
@@ -95,10 +95,10 @@ func TestLoadAliases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			file := filepath.Join(t.TempDir(), "aliases")
-			writeFile(t, file, tt.content)
+			testutil.WriteFile(t, file, tt.content)
 
-			got, err := loadAliases(file)
-			checkErr(t, err, tt.wantErr)
+			got, err := Load(file)
+			testutil.CheckErr(t, err, tt.wantErr)
 			if tt.wantErr != "" {
 				return
 			}
@@ -110,7 +110,7 @@ func TestLoadAliases(t *testing.T) {
 }
 
 func TestLoadAliasesMissingFile(t *testing.T) {
-	got, err := loadAliases(filepath.Join(t.TempDir(), "nope"))
+	got, err := Load(filepath.Join(t.TempDir(), "nope"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestLoadAliasesMissingFile(t *testing.T) {
 }
 
 func TestLoadAliasesDirectory(t *testing.T) {
-	_, err := loadAliases(t.TempDir())
+	_, err := Load(t.TempDir())
 	if err == nil {
 		t.Fatal("expected error when alias file is a directory")
 	}
@@ -145,62 +145,9 @@ func TestResolvePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.arg, func(t *testing.T) {
-			if got := resolvePath(tt.arg, aliases); got != tt.want {
-				t.Errorf("resolvePath(%q) = %q, want %q", tt.arg, got, tt.want)
+			if got := Resolve(tt.arg, aliases); got != tt.want {
+				t.Errorf("Resolve(%q) = %q, want %q", tt.arg, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestRunWithAliases(t *testing.T) {
-	root := t.TempDir()
-	chdir(t, root)
-	src := mkdir(t, root, "real-src")
-	dst := filepath.Join(root, "real-dst")
-	writeFile(t, filepath.Join(src, "a.txt"), "a")
-	writeFile(t, filepath.Join(root, ".config", "aliases"),
-		fmt.Sprintf("# aliases\n\none = %q\ntwo = %q\n", src, dst))
-
-	var stdout, stderr bytes.Buffer
-
-	if code := run([]string{"check", "one", "two"}, nil, &stdout, &stderr); code != 0 {
-		t.Fatalf("check: exit code %d, stderr: %q", code, stderr.String())
-	}
-	assertTree(t, "destination after check", snapshot(t, dst), nil)
-
-	stdout.Reset()
-	if code := run([]string{"sync", "one", "two"}, nil, &stdout, &stderr); code != 0 {
-		t.Fatalf("sync: exit code %d, stderr: %q", code, stderr.String())
-	}
-	assertTree(t, "destination after sync", snapshot(t, dst), map[string]string{"a.txt": "a"})
-}
-
-func TestRunAliasWithSeparatorIsNotResolved(t *testing.T) {
-	root := t.TempDir()
-	chdir(t, root)
-	writeFile(t, filepath.Join(root, ".config", "aliases"), fmt.Sprintf("one = %q\n", mkdir(t, root, "real")))
-
-	var stdout, stderr bytes.Buffer
-	code := run([]string{"sync", "./one", "dst"}, nil, &stdout, &stderr)
-	if code != 1 {
-		t.Errorf("exit code = %d, want 1", code)
-	}
-	if want := "Error: source does not exist: ./one"; !bytes.Contains(stderr.Bytes(), []byte(want)) {
-		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
-	}
-}
-
-func TestRunWithInvalidAliasFile(t *testing.T) {
-	root := t.TempDir()
-	chdir(t, root)
-	writeFile(t, filepath.Join(root, ".config", "aliases"), "broken line\n")
-
-	var stdout, stderr bytes.Buffer
-	code := run([]string{"sync", "a", "b"}, nil, &stdout, &stderr)
-	if code != 1 {
-		t.Errorf("exit code = %d, want 1", code)
-	}
-	if want := "aliases:1: invalid alias definition"; !bytes.Contains(stderr.Bytes(), []byte(want)) {
-		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
 	}
 }

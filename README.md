@@ -5,8 +5,10 @@ Dios is a small command-line tool that synchronizes one directory into another, 
 ## Build
 
 ```
-go build -o dios .
+go build -o dios ./cmd/dios
 ```
+
+On Windows the output is `dios.exe`. You can also run it without building: `go run ./cmd/dios check src dst`.
 
 ## Usage
 
@@ -118,6 +120,16 @@ dios sync workspace1 backup
 - Aliases are read from `.config/aliases` in the current directory. A missing file is fine; a malformed one is an error that names the file and line.
 - `.config/` is listed in `.gitignore` because it holds personal paths.
 
+## Project layout
+
+```
+cmd/dios/            command-line interface: argument parsing, output, prompts
+internal/syncer/     directory comparison and synchronization
+internal/alias/      alias file parsing, lookup and creation
+internal/testutil/   filesystem helpers shared by the tests
+.github/workflows/   CI
+```
+
 ## Development
 
 ```
@@ -126,3 +138,5 @@ go vet ./...
 go test ./...
 go build ./...
 ```
+
+Tests use temporary directories and check the resulting filesystem state, including nested directories, replaced and removed entries, options, prompts, aliases and error cases.
