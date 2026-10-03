@@ -6,9 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
-const usage = "usage: dios sync [--dry-run] <source> <destination>"
+const usage = "usage: dios sync <source> <destination>\n       dios check <source> <destination>"
 
 var aliasFile = filepath.Join(".config", "aliases")
 
@@ -21,15 +22,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Error: missing command\n%s\n", usage)
 		return 2
 	}
-	if args[0] != "sync" {
+	switch args[0] {
+	case "sync":
+		return runPaths(args[1:], false, stdout, stderr)
+	case "check":
+		return runPaths(args[1:], true, stdout, stderr)
+	default:
 		fmt.Fprintf(stderr, "Error: unknown command: %s\n%s\n", args[0], usage)
 		return 2
 	}
-	return runSync(args[1:], stdout, stderr)
 }
 
-func runSync(args []string, stdout, stderr io.Writer) int {
-	dryRun, source, destination, err := parseSyncArgs(args)
+func runPaths(args []string, checkOnly bool, stdout, stderr io.Writer) int {
+	source, destination, err := parsePaths(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n%s\n", err, usage)
 		return 2
@@ -43,57 +48,100 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	source = resolvePath(source, aliases)
 	destination = resolvePath(destination, aliases)
 
-	changes, err := syncDirs(source, destination, dryRun)
+	changes, err := syncDirs(source, destination, checkOnly)
 	if err != nil {
-		if !dryRun && len(changes) > 0 {
+		if !checkOnly && len(changes) > 0 {
 			fmt.Fprintln(stdout, "Changes made before the error:")
 			printChanges(stdout, changes)
 		}
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
-	printReport(stdout, changes, dryRun)
+
+	if checkOnly {
+		printCheckReport(stdout, source, destination, changes)
+	} else {
+		printSyncReport(stdout, changes)
+	}
 	return 0
 }
 
-func parseSyncArgs(args []string) (dryRun bool, source, destination string, err error) {
+func parsePaths(args []string) (source, destination string, err error) {
 	var paths []string
 	for _, arg := range args {
-		switch {
-		case arg == "--dry-run":
-			dryRun = true
-		case strings.HasPrefix(arg, "-"):
-			return false, "", "", fmt.Errorf("unknown option: %s", arg)
-		default:
-			paths = append(paths, arg)
+		if strings.HasPrefix(arg, "-") {
+			return "", "", fmt.Errorf("unknown option: %s", arg)
 		}
+		paths = append(paths, arg)
 	}
 	if len(paths) != 2 {
-		return false, "", "", fmt.Errorf("expected <source> and <destination>, got %d path(s)", len(paths))
+		return "", "", fmt.Errorf("expected <source> and <destination>, got %d path(s)", len(paths))
 	}
-	return dryRun, paths[0], paths[1], nil
+	return paths[0], paths[1], nil
 }
 
-func printReport(w io.Writer, changes []change, dryRun bool) {
+func printSyncReport(w io.Writer, changes []change) {
 	if len(changes) == 0 {
 		fmt.Fprintln(w, "Already synchronized.")
 		return
 	}
-	if dryRun {
-		fmt.Fprint(w, "Dry run:\n\n")
-	} else {
-		fmt.Fprintln(w, "Syncing:")
-	}
+	fmt.Fprintln(w, "Syncing:")
 	printChanges(w, changes)
-	if dryRun {
-		fmt.Fprint(w, "\nNo changes were made.\n")
-	} else {
-		fmt.Fprint(w, "\nSync completed.\n")
-	}
+	fmt.Fprint(w, "\nSync completed.\n")
 }
 
 func printChanges(w io.Writer, changes []change) {
 	for _, c := range changes {
 		fmt.Fprintf(w, "  %s\n", c)
 	}
+}
+
+func printCheckReport(w io.Writer, source, destination string, changes []change) {
+	fmt.Fprintf(w, "Checking %s -> %s\n\n", source, destination)
+	if len(changes) == 0 {
+		fmt.Fprintln(w, "Already synchronized.")
+		return
+	}
+
+	width := 0
+	for _, c := range changes {
+		if n := utf8.RuneCountInString(c.label()); n > width {
+			width = n
+		}
+	}
+	for _, c := range changes {
+		fmt.Fprintf(w, "  %c %-*s  %s\n", c.kind, width, c.label(), c.detail())
+	}
+	fmt.Fprintf(w, "\nSummary: %s.\nNo changes were made.\n", summarize(changes))
+}
+
+func summarize(changes []change) string {
+	var create, update, remove, skipped int
+	for _, c := range changes {
+		switch c.kind {
+		case '+':
+			create++
+		case '~':
+			update++
+		case '-':
+			remove++
+		case '!':
+			skipped++
+		}
+	}
+
+	var parts []string
+	if create > 0 {
+		parts = append(parts, fmt.Sprintf("%d to create", create))
+	}
+	if update > 0 {
+		parts = append(parts, fmt.Sprintf("%d to update", update))
+	}
+	if remove > 0 {
+		parts = append(parts, fmt.Sprintf("%d to remove", remove))
+	}
+	if skipped > 0 {
+		parts = append(parts, fmt.Sprintf("%d skipped", skipped))
+	}
+	return strings.Join(parts, ", ")
 }

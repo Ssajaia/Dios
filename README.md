@@ -11,10 +11,24 @@ go build -o dios .
 ## Usage
 
 ```
-dios sync [--dry-run] <source> <destination>
+dios sync <source> <destination>
+dios check <source> <destination>
 ```
 
-`--dry-run` can be placed anywhere among the arguments. It prints what a sync would do and changes nothing.
+`sync` makes the destination match the source. `check` shows what `sync` would do and changes nothing, with the reason for each difference.
+
+```
+$ dios check ./source ./destination
+Checking ./source -> ./destination
+
+  + config.txt         missing in destination
+  ~ documents/a.txt    contents differ
+  + documents/b.txt    missing in destination
+  - old.txt            not in source
+
+Summary: 2 to create, 1 to update, 1 to remove.
+No changes were made.
+```
 
 ```
 $ dios sync ./source ./destination
@@ -34,16 +48,18 @@ Sync completed.
 | `-`    | removed |
 | `!`    | skipped (symlinks and other special files in the source) |
 
-Directories are shown with a trailing `/`. If nothing needs to change, Dios prints `Already synchronized.`.
+Directories are shown with a trailing `/`. If nothing needs to change, both commands print `Already synchronized.`. Run `check` before `sync` to see what would be deleted.
 
 Behavior:
 
 - Files are compared by content and replaced only if they differ.
 - Extra files and directories in the destination are removed.
 - Permissions and modification times of copied files are preserved.
+- Files are written through a temporary file and renamed, so an interrupted copy does not leave a half-written file.
 - Symlinks are never followed. A symlink in the destination is removed as a link; a symlink in the source is skipped.
 - Source and destination must be different, and neither may be inside the other.
 - The destination is created if it does not exist.
+- Exit codes: `0` on success, `1` on a runtime error, `2` on invalid usage.
 
 ## Aliases
 
@@ -56,6 +72,7 @@ backup = "/mnt/backup"
 ```
 
 ```
+dios check workspace1 backup
 dios sync workspace1 backup
 ```
 

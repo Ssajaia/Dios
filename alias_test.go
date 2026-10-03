@@ -163,10 +163,10 @@ func TestRunWithAliases(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	if code := run([]string{"sync", "--dry-run", "one", "two"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("dry run: exit code %d, stderr: %q", code, stderr.String())
+	if code := run([]string{"check", "one", "two"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("check: exit code %d, stderr: %q", code, stderr.String())
 	}
-	assertTree(t, "destination after dry run", snapshot(t, dst), nil)
+	assertTree(t, "destination after check", snapshot(t, dst), nil)
 
 	stdout.Reset()
 	if code := run([]string{"sync", "one", "two"}, &stdout, &stderr); code != 0 {

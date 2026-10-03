@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -405,33 +406,27 @@ func TestValidatePathsSymlinkToSource(t *testing.T) {
 	checkErr(t, validatePaths(src, link), "must be different paths")
 }
 
-func TestParseSyncArgs(t *testing.T) {
+func TestParsePaths(t *testing.T) {
 	tests := []struct {
-		name       string
-		args       []string
-		wantDryRun bool
-		wantPaths  []string
-		wantErr    string
+		name      string
+		args      []string
+		wantPaths []string
+		wantErr   string
 	}{
-		{name: "paths only", args: []string{"a", "b"}, wantPaths: []string{"a", "b"}},
-		{name: "flag first", args: []string{"--dry-run", "a", "b"}, wantDryRun: true, wantPaths: []string{"a", "b"}},
-		{name: "flag between", args: []string{"a", "--dry-run", "b"}, wantDryRun: true, wantPaths: []string{"a", "b"}},
-		{name: "flag last", args: []string{"a", "b", "--dry-run"}, wantDryRun: true, wantPaths: []string{"a", "b"}},
+		{name: "two paths", args: []string{"a", "b"}, wantPaths: []string{"a", "b"}},
 		{name: "no arguments", args: nil, wantErr: "expected <source> and <destination>"},
 		{name: "one path", args: []string{"a"}, wantErr: "expected <source> and <destination>"},
 		{name: "three paths", args: []string{"a", "b", "c"}, wantErr: "expected <source> and <destination>"},
 		{name: "unknown option", args: []string{"--force", "a", "b"}, wantErr: "unknown option: --force"},
+		{name: "dry-run is no longer an option", args: []string{"--dry-run", "a", "b"}, wantErr: "unknown option: --dry-run"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dryRun, src, dst, err := parseSyncArgs(tt.args)
+			src, dst, err := parsePaths(tt.args)
 			checkErr(t, err, tt.wantErr)
 			if tt.wantErr != "" {
 				return
-			}
-			if dryRun != tt.wantDryRun {
-				t.Errorf("dryRun = %v, want %v", dryRun, tt.wantDryRun)
 			}
 			if got := []string{src, dst}; !reflect.DeepEqual(got, tt.wantPaths) {
 				t.Errorf("paths = %v, want %v", got, tt.wantPaths)
@@ -457,9 +452,12 @@ func TestRun(t *testing.T) {
 		{name: "unknown command", args: []string{"copy"}, wantCode: 2, wantStderr: "Error: unknown command: copy"},
 		{name: "wrong argument count", args: []string{"sync", "a"}, wantCode: 2, wantStderr: "Error: expected"},
 		{name: "unknown option", args: []string{"sync", "--force", "a", "b"}, wantCode: 2, wantStderr: "Error: unknown option"},
+		{name: "sync no longer accepts dry-run", args: []string{"sync", "--dry-run", "a", "b"}, wantCode: 2, wantStderr: "Error: unknown option: --dry-run"},
+		{name: "check wrong argument count", args: []string{"check", "a"}, wantCode: 2, wantStderr: "Error: expected"},
+		{name: "check missing source", args: []string{"check", missing, dst}, wantCode: 1, wantStderr: "Error: source does not exist: " + missing},
 		{name: "missing source", args: []string{"sync", missing, dst}, wantCode: 1, wantStderr: "Error: source does not exist: " + missing},
 		{name: "valid", args: []string{"sync", src, dst}, wantCode: 0},
-		{name: "valid with dry run", args: []string{"sync", src, dst, "--dry-run"}, wantCode: 0},
+		{name: "valid check", args: []string{"check", src, dst}, wantCode: 0},
 	}
 
 	for _, tt := range tests {
@@ -487,34 +485,26 @@ func TestRunOutput(t *testing.T) {
 	writeFile(t, filepath.Join(src, "a.txt"), "a")
 	writeFile(t, filepath.Join(dst, "old.txt"), "old")
 
+	header := "Checking " + src + " -> " + dst + "\n\n"
+	checkWant := header +
+		"  + a.txt    missing in destination\n" +
+		"  - old.txt  not in source\n" +
+		"\nSummary: 1 to create, 1 to remove.\n" +
+		"No changes were made.\n"
+
 	steps := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{
-			name: "dry run",
-			args: []string{"sync", "--dry-run", src, dst},
-			want: "Dry run:\n\n  + a.txt\n  - old.txt\n\nNo changes were made.\n",
-		},
-		{
-			name: "dry run again gives the same result",
-			args: []string{"sync", "--dry-run", src, dst},
-			want: "Dry run:\n\n  + a.txt\n  - old.txt\n\nNo changes were made.\n",
-		},
-		{
-			name: "sync",
-			args: []string{"sync", src, dst},
-			want: "Syncing:\n  + a.txt\n  - old.txt\n\nSync completed.\n",
-		},
-		{
-			name: "already synchronized",
-			args: []string{"sync", src, dst},
-			want: "Already synchronized.\n",
-		},
+		{name: "check", args: []string{"check", src, dst}, want: checkWant},
+		{name: "check again gives the same result", args: []string{"check", src, dst}, want: checkWant},
+		{name: "sync", args: []string{"sync", src, dst}, want: "Syncing:\n  + a.txt\n  - old.txt\n\nSync completed.\n"},
+		{name: "already synchronized", args: []string{"sync", src, dst}, want: "Already synchronized.\n"},
+		{name: "check when synchronized", args: []string{"check", src, dst}, want: header + "Already synchronized.\n"},
 	}
 
-	for _, step := range steps {
+	for i, step := range steps {
 		var stdout, stderr bytes.Buffer
 		if code := run(step.args, &stdout, &stderr); code != 0 {
 			t.Fatalf("%s: exit code %d, stderr: %q", step.name, code, stderr.String())
@@ -522,9 +512,57 @@ func TestRunOutput(t *testing.T) {
 		if stdout.String() != step.want {
 			t.Errorf("%s: stdout = %q, want %q", step.name, stdout.String(), step.want)
 		}
+		if i < 2 {
+			assertTree(t, step.name+": destination", snapshot(t, dst), map[string]string{"old.txt": "old"})
+		}
 	}
 
 	assertTree(t, "destination", snapshot(t, dst), map[string]string{"a.txt": "a"})
+}
+
+func TestCheckReasons(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	dst := filepath.Join(root, "dst")
+	build(t, src, map[string]string{
+		"chg.txt":     "1",
+		"dirx/f.txt":  "1",
+		"new.txt":     "n",
+		"t":           "file",
+		"same.txt":    "s",
+		"sub/inner/z": "z",
+	})
+	build(t, dst, map[string]string{
+		"chg.txt":     "2",
+		"dirx":        "file",
+		"t/x":         "x",
+		"old.txt":     "o",
+		"same.txt":    "s",
+		"sub/inner/z": "z",
+		"sub/gone/":   "",
+	})
+
+	changes, err := syncDirs(src, dst, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	for _, c := range changes {
+		got = append(got, fmt.Sprintf("%c %s: %s", c.kind, c.label(), c.detail()))
+	}
+	want := []string{
+		"~ chg.txt: contents differ",
+		"~ dirx/: destination is a file, source is a directory",
+		"+ dirx/f.txt: missing in destination",
+		"+ new.txt: missing in destination",
+		"- sub/gone/: not in source",
+		"~ t: destination is a directory, source is a file",
+		"- old.txt: not in source",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("reasons:\n got  %q\n want %q", got, want)
+	}
 }
 
 func build(t *testing.T, root string, tree map[string]string) {
@@ -585,11 +623,11 @@ func snapshot(t *testing.T, root string) map[string]string {
 func assertTree(t *testing.T, what string, got, want map[string]string) {
 	t.Helper()
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("%s:\n got  %v\n want %v", what, summarize(got), summarize(want))
+		t.Errorf("%s:\n got  %v\n want %v", what, abbreviate(got), abbreviate(want))
 	}
 }
 
-func summarize(tree map[string]string) map[string]string {
+func abbreviate(tree map[string]string) map[string]string {
 	if tree == nil {
 		return nil
 	}

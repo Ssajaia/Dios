@@ -15,17 +15,29 @@ import (
 var errSamePath = errors.New("source and destination must be different paths")
 
 type change struct {
-	kind  byte
-	path  string
-	isDir bool
-	note  string
+	kind   byte
+	path   string
+	isDir  bool
+	reason string
+	note   string
+}
+
+func (c change) label() string {
+	if c.isDir {
+		return c.path + "/"
+	}
+	return c.path
+}
+
+func (c change) detail() string {
+	if c.note != "" {
+		return c.note
+	}
+	return c.reason
 }
 
 func (c change) String() string {
-	s := fmt.Sprintf("%c %s", c.kind, c.path)
-	if c.isDir {
-		s += "/"
-	}
+	s := fmt.Sprintf("%c %s", c.kind, c.label())
 	if c.note != "" {
 		s += " (" + c.note + ")"
 	}
@@ -55,15 +67,15 @@ func syncDirs(source, destination string, dryRun bool) ([]change, error) {
 				return nil, fmt.Errorf("cannot create destination %s: %w", destination, err)
 			}
 		}
-		s.record('+', ".", true)
+		s.record('+', ".", true, "destination does not exist")
 	}
 
 	err = s.syncDir(source, destination, "", dstExists)
 	return s.changes, err
 }
 
-func (s *syncer) record(kind byte, rel string, isDir bool) {
-	s.changes = append(s.changes, change{kind: kind, path: rel, isDir: isDir})
+func (s *syncer) record(kind byte, rel string, isDir bool, reason string) {
+	s.changes = append(s.changes, change{kind: kind, path: rel, isDir: isDir, reason: reason})
 }
 
 func (s *syncer) syncDir(srcDir, dstDir, rel string, dstExists bool) error {
@@ -104,7 +116,7 @@ func (s *syncer) syncDir(srcDir, dstDir, rel string, dstExists bool) error {
 		if err := s.removeDst(filepath.Join(dstDir, name), relPath); err != nil {
 			return err
 		}
-		s.record('-', relPath, dstEntry.IsDir())
+		s.record('-', relPath, dstEntry.IsDir(), "not in source")
 	}
 	return nil
 }
@@ -129,6 +141,7 @@ func (s *syncer) syncEntry(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel
 func (s *syncer) syncSubdir(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel string) error {
 	dstExists := dstEntry != nil
 	kind := byte('+')
+	reason := "missing in destination"
 
 	if dstExists && !dstEntry.IsDir() {
 		if err := s.removeDst(dstPath, rel); err != nil {
@@ -136,6 +149,10 @@ func (s *syncer) syncSubdir(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, re
 		}
 		dstExists = false
 		kind = '~'
+		reason = "destination is not a directory, source is a directory"
+		if dstEntry.Type().IsRegular() {
+			reason = "destination is a file, source is a directory"
+		}
 	}
 
 	if !dstExists {
@@ -148,7 +165,7 @@ func (s *syncer) syncSubdir(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, re
 				return fmt.Errorf("cannot create directory %s: %w", rel, err)
 			}
 		}
-		s.record(kind, rel, true)
+		s.record(kind, rel, true, reason)
 	}
 
 	return s.syncDir(srcPath, dstPath, rel, dstExists)
@@ -161,6 +178,7 @@ func (s *syncer) syncFile(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel 
 	}
 
 	kind := byte('+')
+	reason := "missing in destination"
 	if dstEntry != nil {
 		kind = '~'
 		if dstEntry.Type().IsRegular() {
@@ -175,8 +193,15 @@ func (s *syncer) syncFile(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel 
 			if same {
 				return nil
 			}
-		} else if err := s.removeDst(dstPath, rel); err != nil {
-			return err
+			reason = "contents differ"
+		} else {
+			if err := s.removeDst(dstPath, rel); err != nil {
+				return err
+			}
+			reason = "destination is not a regular file, source is a file"
+			if dstEntry.IsDir() {
+				reason = "destination is a directory, source is a file"
+			}
 		}
 	}
 
@@ -185,7 +210,7 @@ func (s *syncer) syncFile(srcEntry, dstEntry fs.DirEntry, srcPath, dstPath, rel 
 			return fmt.Errorf("cannot copy %s: %w", rel, err)
 		}
 	}
-	s.record(kind, rel, false)
+	s.record(kind, rel, false, reason)
 	return nil
 }
 
