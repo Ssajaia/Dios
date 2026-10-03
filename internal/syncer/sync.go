@@ -487,13 +487,13 @@ func validatePaths(source, destination string) error {
 		return errSamePath
 	}
 
-	srcAbs, err := filepath.Abs(source)
+	srcAbs, err := resolvePath(source)
 	if err != nil {
-		return fmt.Errorf("cannot resolve source %s: %w", source, err)
+		return fmt.Errorf("cannot resolve source path %s: %w", source, err)
 	}
-	dstAbs, err := filepath.Abs(destination)
+	dstAbs, err := resolvePath(destination)
 	if err != nil {
-		return fmt.Errorf("cannot resolve destination %s: %w", destination, err)
+		return fmt.Errorf("cannot resolve destination path %s: %w", destination, err)
 	}
 	switch {
 	case samePath(srcAbs, dstAbs):
@@ -504,6 +504,34 @@ func validatePaths(source, destination string) error {
 		return errors.New("source must not be inside destination")
 	}
 	return nil
+}
+
+func resolvePath(name string) (string, error) {
+	abs, err := filepath.Abs(name)
+	if err != nil {
+		return "", err
+	}
+	candidate := filepath.Clean(abs)
+	var unresolved []string
+	for {
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if err == nil {
+			for i := len(unresolved) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, unresolved[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			return "", err
+		}
+		unresolved = append(unresolved, filepath.Base(candidate))
+		candidate = parent
+	}
 }
 
 func samePath(a, b string) bool {
@@ -571,7 +599,23 @@ func checkDirectoryCaseSafety(root string) error {
 }
 
 func isCaseInsensitiveFS(dir string) bool {
-	base, err := os.MkdirTemp(dir, "case-check-")
+	probeDir := filepath.Clean(dir)
+	for {
+		info, err := os.Stat(probeDir)
+		if err == nil && info.IsDir() {
+			break
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return false
+		}
+		parent := filepath.Dir(probeDir)
+		if parent == probeDir {
+			return false
+		}
+		probeDir = parent
+	}
+
+	base, err := os.MkdirTemp(probeDir, "case-check-")
 	if err != nil {
 		return false
 	}

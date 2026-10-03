@@ -10,6 +10,16 @@ go build -ldflags "-X main.version=v1.0.0" -o dios ./cmd/dios
 
 `main.version` is initialized to `dev` in the CLI and can be overridden at build time with linker flags. On Windows the output is `dios.exe`. You can also run it without building: `go run ./cmd/dios check src dst`.
 
+## Installation
+
+Install the latest version with Go:
+
+```
+go install github.com/ssajaia/dios/cmd/dios@latest
+```
+
+Tagged releases publish standalone binaries on the [GitHub Releases page](https://github.com/ssajaia/dios/releases): Linux amd64, Windows amd64 (`.exe`), and macOS amd64 and arm64. Each binary reports the version from its Git tag.
+
 ## Usage
 
 ```
@@ -97,7 +107,7 @@ Behavior:
 - Permissions and modification times of copied files are preserved.
 - Files are written through a temporary file and renamed, so an interrupted copy does not leave a half-written file.
 - Symlinks are never followed. A symlink in the destination is removed as a link; a symlink in the source is skipped.
-- Source and destination must be different, and neither may be inside the other.
+- Source and destination must be different, and neither may be inside the other, including when nesting is hidden through symlinked paths.
 - The destination is created if it does not exist.
 - Exit codes: `0` when a check finds no differences or a sync succeeds, `1` when a check finds differences or a runtime error occurs, `2` on invalid usage.
 

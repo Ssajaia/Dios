@@ -217,6 +217,15 @@ func TestCheckDirectoryCaseSafetyRejectsCaseCollisions(t *testing.T) {
 	}
 }
 
+func TestIsCaseInsensitiveFSWithMissingPath(t *testing.T) {
+	root := t.TempDir()
+	want := isCaseInsensitiveFS(root)
+	got := isCaseInsensitiveFS(filepath.Join(root, "not-created", "nested"))
+	if got != want {
+		t.Fatalf("case-insensitivity for missing path = %v, want %v", got, want)
+	}
+}
+
 func TestSyncErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -353,6 +362,66 @@ func TestSyncRemovesDestinationSymlinkWithoutFollowing(t *testing.T) {
 	if data, err := os.ReadFile(keep); err != nil || string(data) != "keep" {
 		t.Errorf("file behind symlink was touched: %q, %v", data, err)
 	}
+}
+
+func TestSyncRejectsNestingThroughSymlinks(t *testing.T) {
+	t.Run("destination nested through symlinked parent", func(t *testing.T) {
+		root := t.TempDir()
+		src := filepath.Join(root, "src")
+		if err := os.MkdirAll(src, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sourceFile := filepath.Join(src, "keep.txt")
+		if err := os.WriteFile(sourceFile, []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sourceAlias := filepath.Join(root, "source-alias")
+		if err := os.Symlink(src, sourceAlias); err != nil {
+			t.Skipf("directory symlinks not supported: %v", err)
+		}
+		dst := filepath.Join(sourceAlias, "nested-destination")
+
+		_, err := Sync(src, dst, Options{})
+		testutil.CheckErr(t, err, "destination must not be inside source")
+		if _, err := os.Lstat(dst); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("destination was created: %v", err)
+		}
+		if data, err := os.ReadFile(sourceFile); err != nil || string(data) != "keep" {
+			t.Fatalf("source file changed: %q, %v", data, err)
+		}
+	})
+
+	t.Run("source nested through symlinked parent", func(t *testing.T) {
+		root := t.TempDir()
+		dst := filepath.Join(root, "dst")
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		keep := filepath.Join(dst, "keep.txt")
+		if err := os.WriteFile(keep, []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dstAlias := filepath.Join(root, "destination-alias")
+		if err := os.Symlink(dst, dstAlias); err != nil {
+			t.Skipf("directory symlinks not supported: %v", err)
+		}
+		src := filepath.Join(dstAlias, "nested-source")
+		if err := os.MkdirAll(src, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, "new.txt"), []byte("new"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := Sync(src, dst, Options{})
+		testutil.CheckErr(t, err, "source must not be inside destination")
+		if data, err := os.ReadFile(keep); err != nil || string(data) != "keep" {
+			t.Fatalf("destination file changed: %q, %v", data, err)
+		}
+		if _, err := os.Stat(filepath.Join(dst, "new.txt")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("destination was synchronized despite nesting: %v", err)
+		}
+	})
 }
 
 func TestValidatePaths(t *testing.T) {
