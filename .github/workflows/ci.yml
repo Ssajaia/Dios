@@ -6,7 +6,11 @@ on:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -16,6 +20,8 @@ jobs:
           go-version-file: go.mod
 
       - name: Check formatting
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
           files=$(gofmt -l .)
           if [ -n "$files" ]; then

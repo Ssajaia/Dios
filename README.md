@@ -5,10 +5,10 @@ Dios is a small command-line tool that synchronizes one directory into another, 
 ## Build
 
 ```
-go build -o dios ./cmd/dios
+go build -ldflags "-X main.version=v1.0.0" -o dios ./cmd/dios
 ```
 
-On Windows the output is `dios.exe`. You can also run it without building: `go run ./cmd/dios check src dst`.
+`main.version` is initialized to `dev` in the CLI and can be overridden at build time with linker flags. On Windows the output is `dios.exe`. You can also run it without building: `go run ./cmd/dios check src dst`.
 
 ## Usage
 
@@ -16,9 +16,14 @@ On Windows the output is `dios.exe`. You can also run it without building: `go r
 dios init
 dios sync [options] <source> <destination>
 dios check [options] <source> <destination>
+dios help [command]
+dios --help
+dios --version
 ```
 
-`init` creates the alias file (see [Aliases](#aliases)). `sync` makes the destination match the source. `check` shows what `sync` would do and changes nothing, with the reason for each difference.
+`init` creates the alias file (see [Aliases](#aliases)). `sync` makes the destination match the source. `check` shows what `sync` would do and changes nothing, with the reason for each difference. `help` prints brief command usage, and `--version` prints the current build version.
+
+Use the current-directory alias file at `.config/aliases` and include `-h` or `--help` to see command-specific options.
 
 ```
 $ dios check ./source ./destination
@@ -94,7 +99,7 @@ Behavior:
 - Symlinks are never followed. A symlink in the destination is removed as a link; a symlink in the source is skipped.
 - Source and destination must be different, and neither may be inside the other.
 - The destination is created if it does not exist.
-- Exit codes: `0` on success, `1` on a runtime error, `2` on invalid usage.
+- Exit codes: `0` when a check finds no differences or a sync succeeds, `1` when a check finds differences or a runtime error occurs, `2` on invalid usage.
 
 ## Aliases
 

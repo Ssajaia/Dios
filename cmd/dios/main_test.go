@@ -83,8 +83,12 @@ func TestRunOutput(t *testing.T) {
 
 	for i, step := range steps {
 		var stdout, stderr bytes.Buffer
-		if code := run(step.args, nil, &stdout, &stderr); code != 0 {
-			t.Fatalf("%s: exit code %d, stderr: %q", step.name, code, stderr.String())
+		wantCode := 0
+		if i < 2 {
+			wantCode = 1
+		}
+		if code := run(step.args, nil, &stdout, &stderr); code != wantCode {
+			t.Fatalf("%s: exit code %d, want %d (stderr: %q)", step.name, code, wantCode, stderr.String())
 		}
 		if stdout.String() != step.want {
 			t.Errorf("%s: stdout = %q, want %q", step.name, stdout.String(), step.want)
@@ -172,6 +176,49 @@ func TestRunCheckRejectsNotSure(t *testing.T) {
 	}
 }
 
+func TestRunCheckExitCodes(t *testing.T) {
+	root := t.TempDir()
+	testutil.Chdir(t, root)
+	src := testutil.Mkdir(t, root, "src")
+	dst := filepath.Join(root, "dst")
+	testutil.WriteFile(t, filepath.Join(src, "a.txt"), "a")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"check", src, dst}, nil, &stdout, &stderr); code != 1 {
+		t.Fatalf("check on missing destination: exit code = %d, want 1", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Summary: 2 to create") {
+		t.Fatalf("stdout = %q, want summary to contain create", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"sync", src, dst}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("sync: exit code = %d, stderr: %q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"check", src, dst}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("check on synchronized tree: exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), "Already synchronized.") {
+		t.Fatalf("stdout = %q, want synchronized message", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"check", "a"}, nil, &stdout, &stderr); code != 2 {
+		t.Fatalf("check usage error: exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "Error: expected <source> and <destination>") {
+		t.Fatalf("stderr = %q, want usage error", stderr.String())
+	}
+}
+
 func TestRunSkipAndPreventDelete(t *testing.T) {
 	root := t.TempDir()
 	testutil.Chdir(t, root)
@@ -183,7 +230,7 @@ func TestRunSkipAndPreventDelete(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"check", src, dst, "-s", "main.py", "--skip=readme.md", "--pd"}
-	if code := run(args, nil, &stdout, &stderr); code != 0 {
+	if code := run(args, nil, &stdout, &stderr); code != 1 {
 		t.Fatalf("check: exit code %d, stderr: %q", code, stderr.String())
 	}
 	want := header +
@@ -218,6 +265,39 @@ func TestRunSkipTakesOneValue(t *testing.T) {
 	}
 }
 
+func TestRunHelpAndVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantCode int
+		wantText string
+	}{
+		{name: "general help", args: []string{"--help"}, wantCode: 0, wantText: "Dios synchronizes one directory into another"},
+		{name: "short help", args: []string{"-h"}, wantCode: 0, wantText: "Usage:"},
+		{name: "help command", args: []string{"help", "sync"}, wantCode: 0, wantText: "usage: dios sync"},
+		{name: "sync help", args: []string{"sync", "--help"}, wantCode: 0, wantText: "usage: dios sync"},
+		{name: "check help", args: []string{"check", "--help"}, wantCode: 0, wantText: "usage: dios check"},
+		{name: "init help", args: []string{"init", "--help"}, wantCode: 0, wantText: ".config/aliases"},
+		{name: "version flag", args: []string{"--version"}, wantCode: 0, wantText: version + "\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := run(tt.args, nil, &stdout, &stderr)
+			if code != tt.wantCode {
+				t.Fatalf("exit code = %d, want %d; stderr = %q", code, tt.wantCode, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), tt.wantText) {
+				t.Fatalf("stdout = %q, want it to contain %q", stdout.String(), tt.wantText)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
 func replaceAll(args []string, pairs ...string) []string {
 	out := make([]string, len(args))
 	for i, arg := range args {
@@ -242,7 +322,7 @@ func TestRunWithAliases(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	if code := run([]string{"check", "one", "two"}, nil, &stdout, &stderr); code != 0 {
+	if code := run([]string{"check", "one", "two"}, nil, &stdout, &stderr); code != 1 {
 		t.Fatalf("check: exit code %d, stderr: %q", code, stderr.String())
 	}
 	testutil.AssertTree(t, "destination after check", testutil.Snapshot(t, dst), nil)

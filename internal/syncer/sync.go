@@ -11,9 +11,15 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 var errSamePath = errors.New("source and destination must be different paths")
+
+var (
+	tmpMu   sync.Mutex
+	tracked = map[string]struct{}{}
+)
 
 // Change describes one difference between source and destination.
 // Kind is '+' (create), '~' (update), '-' (remove) or '!' (left alone).
@@ -68,6 +74,9 @@ func Sync(source, destination string, opts Options) ([]Change, error) {
 	if err := validatePaths(source, destination); err != nil {
 		return nil, err
 	}
+	if err := ensureCaseSafe(source, destination); err != nil {
+		return nil, err
+	}
 
 	s := &session{opts: opts}
 
@@ -85,8 +94,15 @@ func Sync(source, destination string, opts Options) ([]Change, error) {
 			if err := os.MkdirAll(destination, 0o755); err != nil {
 				return nil, fmt.Errorf("cannot create destination %s: %w", destination, err)
 			}
+			if err := cleanupStaleTempDir(destination); err != nil {
+				return nil, err
+			}
 		}
 		s.add(c)
+	} else if !opts.DryRun {
+		if err := cleanupStaleTempDir(destination); err != nil {
+			return nil, err
+		}
 	}
 
 	err = s.syncDir(source, destination, "", dstExists)
@@ -374,9 +390,11 @@ func copyFile(srcPath, dstPath string, info fs.FileInfo) (err error) {
 		return err
 	}
 	tmpName := tmp.Name()
+	registerTempFile(tmpName)
 	defer func() {
+		unregisterTempFile(tmpName)
 		if err != nil {
-			os.Remove(tmpName)
+			_ = os.Remove(tmpName)
 		}
 	}()
 
@@ -393,7 +411,56 @@ func copyFile(srcPath, dstPath string, info fs.FileInfo) (err error) {
 	if err = os.Chtimes(tmpName, info.ModTime(), info.ModTime()); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, dstPath)
+	if err = os.Rename(tmpName, dstPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func registerTempFile(name string) {
+	tmpMu.Lock()
+	defer tmpMu.Unlock()
+	tracked[name] = struct{}{}
+}
+
+func unregisterTempFile(name string) {
+	tmpMu.Lock()
+	defer tmpMu.Unlock()
+	delete(tracked, name)
+}
+
+func cleanupTrackedTempFiles() {
+	tmpMu.Lock()
+	paths := make([]string, 0, len(tracked))
+	for name := range tracked {
+		paths = append(paths, name)
+	}
+	tmpMu.Unlock()
+	for _, path := range paths {
+		_ = os.Remove(path)
+	}
+	tmpMu.Lock()
+	tracked = map[string]struct{}{}
+	tmpMu.Unlock()
+}
+
+func cleanupStaleTempDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("cannot clean temporary files in %s: %w", dir, err)
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".dios-tmp-") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("cannot remove temporary file %s: %w", entry.Name(), err)
+		}
+	}
+	return nil
 }
 
 func validatePaths(source, destination string) error {
@@ -429,7 +496,7 @@ func validatePaths(source, destination string) error {
 		return fmt.Errorf("cannot resolve destination %s: %w", destination, err)
 	}
 	switch {
-	case srcAbs == dstAbs:
+	case samePath(srcAbs, dstAbs):
 		return errSamePath
 	case isInside(srcAbs, dstAbs):
 		return errors.New("destination must not be inside source")
@@ -439,10 +506,82 @@ func validatePaths(source, destination string) error {
 	return nil
 }
 
+func samePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if isCaseInsensitiveFS(filepath.Dir(a)) {
+		return strings.EqualFold(a, b)
+	}
+	return false
+}
+
 func isInside(parent, child string) bool {
+	if samePath(parent, child) {
+		return false
+	}
+	if isCaseInsensitiveFS(parent) {
+		parent = strings.ToLower(parent)
+		child = strings.ToLower(child)
+	}
 	rel, err := filepath.Rel(parent, child)
 	if err != nil {
 		return false
 	}
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func ensureCaseSafe(source, destination string) error {
+	if !isCaseInsensitiveFS(source) && !isCaseInsensitiveFS(destination) {
+		return nil
+	}
+	for _, root := range []string{source, destination} {
+		if _, err := os.Stat(root); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("cannot inspect %s: %w", root, err)
+		}
+		if err := checkDirectoryCaseSafety(root); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkDirectoryCaseSafety(root string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			if err := checkDirectoryCaseSafety(filepath.Join(root, entry.Name())); err != nil {
+				return err
+			}
+			continue
+		}
+		key := strings.ToLower(entry.Name())
+		if prev, ok := seen[key]; ok {
+			return fmt.Errorf("case-insensitive name collision: %s and %s", prev, entry.Name())
+		}
+		seen[key] = entry.Name()
+	}
+	return nil
+}
+
+func isCaseInsensitiveFS(dir string) bool {
+	base, err := os.MkdirTemp(dir, "case-check-")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(base)
+	lower := filepath.Join(base, "a.txt")
+	upper := filepath.Join(base, "A.txt")
+	if err := os.WriteFile(lower, []byte("x"), 0o600); err != nil {
+		return false
+	}
+	_, err = os.Stat(upper)
+	return err == nil
 }

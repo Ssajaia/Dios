@@ -164,6 +164,59 @@ func TestSync(t *testing.T) {
 	}
 }
 
+func TestSyncRemovesStaleTempFiles(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	dst := filepath.Join(root, "dst")
+	testutil.Build(t, src, map[string]string{"a.txt": "new"})
+	testutil.Build(t, dst, map[string]string{"a.txt": "old"})
+
+	stale := filepath.Join(dst, ".dios-tmp-stale")
+	if err := os.WriteFile(stale, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Sync(src, dst, Options{}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stale temp file remained at %s: %v", stale, err)
+	}
+}
+
+func TestCleanupTrackedTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	tmp := filepath.Join(dir, ".dios-tmp-123")
+	if err := os.WriteFile(tmp, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registerTempFile(tmp)
+	cleanupTrackedTempFiles()
+	if _, err := os.Stat(tmp); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("tracked temp file still exists: %v", err)
+	}
+}
+
+func TestSyncRejectsCaseCollisionsOnCaseSensitiveFilesystems(t *testing.T) {
+	root := t.TempDir()
+	if isCaseInsensitiveFS(root) {
+		t.Skip("case-insensitive filesystem; collision cannot be represented")
+	}
+
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"A.txt", "a.txt"} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ensureCaseSafe(src, filepath.Join(root, "dst")); err == nil {
+		t.Fatal("expected case-insensitive collision detection")
+	}
+}
+
 func TestSyncErrors(t *testing.T) {
 	tests := []struct {
 		name    string
