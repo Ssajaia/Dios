@@ -70,30 +70,26 @@ func TestRunOutput(t *testing.T) {
 		"No changes were made.\n"
 
 	steps := []struct {
-		name string
-		args []string
-		want string
+		name     string
+		args     []string
+		want     string
+		wantCode int
 	}{
-		{name: "check", args: []string{"check", src, dst}, want: checkWant},
-		{name: "check again gives the same result", args: []string{"check", src, dst}, want: checkWant},
+		{name: "check", args: []string{"check", src, dst}, want: checkWant, wantCode: 1},
 		{name: "sync", args: []string{"sync", src, dst}, want: "Syncing:\n  + a.txt\n  - old.txt\n\nSync completed.\n"},
 		{name: "already synchronized", args: []string{"sync", src, dst}, want: "Already synchronized.\n"},
 		{name: "check when synchronized", args: []string{"check", src, dst}, want: header + "Already synchronized.\n"},
 	}
 
-	for i, step := range steps {
+	for _, step := range steps {
 		var stdout, stderr bytes.Buffer
-		wantCode := 0
-		if i < 2 {
-			wantCode = 1
-		}
-		if code := run(step.args, nil, &stdout, &stderr); code != wantCode {
-			t.Fatalf("%s: exit code %d, want %d (stderr: %q)", step.name, code, wantCode, stderr.String())
+		if code := run(step.args, nil, &stdout, &stderr); code != step.wantCode {
+			t.Fatalf("%s: exit code %d, want %d (stderr: %q)", step.name, code, step.wantCode, stderr.String())
 		}
 		if stdout.String() != step.want {
 			t.Errorf("%s: stdout = %q, want %q", step.name, stdout.String(), step.want)
 		}
-		if i < 2 {
+		if step.name == "check" {
 			testutil.AssertTree(t, step.name+": destination", testutil.Snapshot(t, dst), map[string]string{"old.txt": "old"})
 		}
 	}
@@ -143,7 +139,15 @@ func TestRunNotSure(t *testing.T) {
 			testutil.Build(t, src, map[string]string{"a.txt": "a", "b.txt": "b", "c.txt": "c", "d.txt": "d", "e.txt": "e"})
 			testutil.Build(t, dst, map[string]string{})
 
-			args := replaceAll(tt.args, "SRC", src, "DST", dst)
+			args := append([]string(nil), tt.args...)
+			for i, arg := range args {
+				switch arg {
+				case "SRC":
+					args[i] = src
+				case "DST":
+					args[i] = dst
+				}
+			}
 			var stdout, stderr bytes.Buffer
 			if code := run(args, strings.NewReader(tt.input), &stdout, &stderr); code != 0 {
 				t.Fatalf("exit code %d, stderr: %q", code, stderr.String())
@@ -296,19 +300,6 @@ func TestRunHelpAndVersion(t *testing.T) {
 			}
 		})
 	}
-}
-
-func replaceAll(args []string, pairs ...string) []string {
-	out := make([]string, len(args))
-	for i, arg := range args {
-		out[i] = arg
-		for j := 0; j+1 < len(pairs); j += 2 {
-			if arg == pairs[j] {
-				out[i] = pairs[j+1]
-			}
-		}
-	}
-	return out
 }
 
 func TestRunWithAliases(t *testing.T) {

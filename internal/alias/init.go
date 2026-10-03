@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 )
 
-// Template is the content of a newly initialized alias file.
 const Template = `# Dios aliases
 # One alias per line: name = "path"
 # Use / in paths, or wrap the path in backticks to keep backslashes.

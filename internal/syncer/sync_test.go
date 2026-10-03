@@ -184,19 +184,6 @@ func TestSyncRemovesStaleTempFiles(t *testing.T) {
 	}
 }
 
-func TestCleanupTrackedTempFiles(t *testing.T) {
-	dir := t.TempDir()
-	tmp := filepath.Join(dir, ".dios-tmp-123")
-	if err := os.WriteFile(tmp, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	registerTempFile(tmp)
-	cleanupTrackedTempFiles()
-	if _, err := os.Stat(tmp); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("tracked temp file still exists: %v", err)
-	}
-}
-
 func TestCheckDirectoryCaseSafetyRejectsCaseCollisions(t *testing.T) {
 	root := t.TempDir()
 	if isCaseInsensitiveFS(root) {

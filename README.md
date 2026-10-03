@@ -5,10 +5,10 @@ Dios is a small command-line tool that synchronizes one directory into another, 
 ## Build
 
 ```
-go build -ldflags "-X main.version=v1.0.0" -o dios ./cmd/dios
+go build ./cmd/dios
 ```
 
-`main.version` is initialized to `dev` in the CLI and can be overridden at build time with linker flags. On Windows the output is `dios.exe`. You can also run it without building: `go run ./cmd/dios check src dst`.
+Builds report `dev` by default. Tagged releases inject the Git tag as the version. On Windows, the binary is `dios.exe`.
 
 ## Installation
 
@@ -18,7 +18,11 @@ Install the latest version with Go:
 go install github.com/ssajaia/dios/cmd/dios@latest
 ```
 
-Tagged releases publish standalone binaries on the [GitHub Releases page](https://github.com/ssajaia/dios/releases): Linux amd64, Windows amd64 (`.exe`), and macOS amd64 and arm64. Each binary reports the version from its Git tag.
+Tagged releases publish binaries on the [GitHub Releases page](https://github.com/ssajaia/dios/releases).
+
+## Supported platforms
+
+Linux, Windows, and macOS are tested in CI. Release binaries are provided for Linux amd64, Windows amd64, and macOS amd64 and arm64.
 
 ## Usage
 
@@ -33,7 +37,7 @@ dios --version
 
 `init` creates the alias file (see [Aliases](#aliases)). `sync` makes the destination match the source. `check` shows what `sync` would do and changes nothing, with the reason for each difference. `help` prints brief command usage, and `--version` prints the current build version.
 
-Use the current-directory alias file at `.config/aliases` and include `-h` or `--help` to see command-specific options.
+Use `-h` or `--help` to see command-specific options.
 
 ```
 $ dios check ./source ./destination
@@ -46,17 +50,6 @@ Checking ./source -> ./destination
 
 Summary: 2 to create, 1 to update, 1 to remove.
 No changes were made.
-```
-
-```
-$ dios sync ./source ./destination
-Syncing:
-  + config.txt
-  ~ documents/a.txt
-  + documents/b.txt
-  - old.txt
-
-Sync completed.
 ```
 
 | Symbol | Meaning |
@@ -82,23 +75,7 @@ Options can be placed anywhere among the arguments.
 
 **`--prevent-delete`** keeps files that exist only in the destination and lists them as `! name (kept: not in source)`. A change that would require deleting an existing entry, such as replacing a file with a directory, is skipped and listed with `!`.
 
-**`--not-sure`** shows each change with its reason and waits for an answer:
-
-```
-$ dios sync --ns src dst
-+ config.txt  (missing in destination)  apply? [y/N] y
-~ documents/a.txt  (contents differ)  apply? [y/N] n
-- old.txt  (not in source)  apply? [y/N] y
-
-Syncing:
-  + config.txt
-  ! documents/a.txt (skipped by user)
-  - old.txt
-
-Sync completed.
-```
-
-Declining a new directory skips everything inside it. Closing the input (Ctrl+D, or Ctrl+Z then Enter on Windows) counts as "no" for all remaining changes. `check` never changes anything, so it does not accept `--ns`.
+**`--not-sure`** asks before each change. `y` or `Y` applies it; any other answer skips it. Declining a new directory skips its contents. `check` does not accept `--ns`.
 
 Behavior:
 
@@ -133,25 +110,19 @@ dios sync workspace1 backup
 - Use `/` in paths, or wrap the path in backticks to keep backslashes: ``work = `C:\users\someone` ``.
 - Only arguments without `/` or `\` are looked up. `./workspace1` always means a real path.
 - Aliases are read from `.config/aliases` in the current directory. A missing file is fine; a malformed one is an error that names the file and line.
+- Aliases are local to the current directory; Dios has no global alias file.
 - `.config/` is listed in `.gitignore` because it holds personal paths.
-
-## Project layout
-
-```
-cmd/dios/            command-line interface: argument parsing, output, prompts
-internal/syncer/     directory comparison and synchronization
-internal/alias/      alias file parsing, lookup and creation
-internal/testutil/   filesystem helpers shared by the tests
-.github/workflows/   CI
-```
 
 ## Development
 
 ```
-gofmt -l .          # lists unformatted files
+gofmt -w .
+gofmt -l .
 go vet ./...
 go test ./...
-go build ./...
+go build ./cmd/dios
 ```
 
-Tests use temporary directories and check the resulting filesystem state, including nested directories, replaced and removed entries, options, prompts, aliases and error cases.
+## License
+
+MIT. See [LICENSE](./LICENSE).

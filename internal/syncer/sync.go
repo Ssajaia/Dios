@@ -11,15 +11,11 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
 var errSamePath = errors.New("source and destination must be different paths")
 
-var (
-	tmpMu   sync.Mutex
-	tracked = map[string]struct{}{}
-)
+const tempPrefix = ".dios-tmp-"
 
 // Change describes one difference between source and destination.
 // Kind is '+' (create), '~' (update), '-' (remove) or '!' (left alone).
@@ -55,7 +51,6 @@ func (c Change) String() string {
 
 const needsDeleteNote = "skipped: needs delete, --prevent-delete is set"
 
-// Options controls what Sync does.
 type Options struct {
 	DryRun        bool
 	PreventDelete bool
@@ -385,14 +380,12 @@ func copyFile(srcPath, dstPath string, info fs.FileInfo) (err error) {
 	}
 	defer in.Close()
 
-	tmp, err := os.CreateTemp(filepath.Dir(dstPath), ".dios-tmp-*")
+	tmp, err := os.CreateTemp(filepath.Dir(dstPath), tempPrefix+"*")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
-	registerTempFile(tmpName)
 	defer func() {
-		unregisterTempFile(tmpName)
 		if err != nil {
 			_ = os.Remove(tmpName)
 		}
@@ -411,37 +404,7 @@ func copyFile(srcPath, dstPath string, info fs.FileInfo) (err error) {
 	if err = os.Chtimes(tmpName, info.ModTime(), info.ModTime()); err != nil {
 		return err
 	}
-	if err = os.Rename(tmpName, dstPath); err != nil {
-		return err
-	}
-	return nil
-}
-
-func registerTempFile(name string) {
-	tmpMu.Lock()
-	defer tmpMu.Unlock()
-	tracked[name] = struct{}{}
-}
-
-func unregisterTempFile(name string) {
-	tmpMu.Lock()
-	defer tmpMu.Unlock()
-	delete(tracked, name)
-}
-
-func cleanupTrackedTempFiles() {
-	tmpMu.Lock()
-	paths := make([]string, 0, len(tracked))
-	for name := range tracked {
-		paths = append(paths, name)
-	}
-	tmpMu.Unlock()
-	for _, path := range paths {
-		_ = os.Remove(path)
-	}
-	tmpMu.Lock()
-	tracked = map[string]struct{}{}
-	tmpMu.Unlock()
+	return os.Rename(tmpName, dstPath)
 }
 
 func cleanupStaleTempDir(dir string) error {
@@ -453,7 +416,7 @@ func cleanupStaleTempDir(dir string) error {
 		return fmt.Errorf("cannot clean temporary files in %s: %w", dir, err)
 	}
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), ".dios-tmp-") {
+		if !strings.HasPrefix(entry.Name(), tempPrefix) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {

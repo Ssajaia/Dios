@@ -1,6 +1,5 @@
 # Build artifacts
 /dios
-/dios.exe
 *.exe
 *.test
 *.out
