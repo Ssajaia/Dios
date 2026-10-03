@@ -11,11 +11,12 @@ go build -o dios .
 ## Usage
 
 ```
+dios init
 dios sync <source> <destination>
 dios check <source> <destination>
 ```
 
-`sync` makes the destination match the source. `check` shows what `sync` would do and changes nothing, with the reason for each difference.
+`init` creates the alias file (see [Aliases](#aliases)). `sync` makes the destination match the source. `check` shows what `sync` would do and changes nothing, with the reason for each difference.
 
 ```
 $ dios check ./source ./destination
@@ -63,13 +64,17 @@ Behavior:
 
 ## Aliases
 
-Dios reads aliases from `.config/aliases` in the current directory. Each line is `name = "path"`:
+Run `dios init` in the directory you work from. It creates `.config/aliases` with a commented template and prints `Created .config/aliases`. If the file already exists, `init` leaves it untouched and exits with an error.
+
+Add one alias per line as `name = "path"`:
 
 ```
 # .config/aliases
 workspace1 = "C:/users/someone/projects"
 backup = "/mnt/backup"
 ```
+
+Then use the names instead of paths:
 
 ```
 dios check workspace1 backup
@@ -78,7 +83,8 @@ dios sync workspace1 backup
 
 - Use `/` in paths, or wrap the path in backticks to keep backslashes: ``work = `C:\users\someone` ``.
 - Only arguments without `/` or `\` are looked up. `./workspace1` always means a real path.
-- A missing alias file is fine. A malformed one is an error that names the file and line.
+- Aliases are read from `.config/aliases` in the current directory. A missing file is fine; a malformed one is an error that names the file and line.
+- `.config/` is listed in `.gitignore` because it holds personal paths.
 
 ## Development
 

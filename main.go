@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-const usage = "usage: dios sync <source> <destination>\n       dios check <source> <destination>"
+const usage = "usage: dios init\n       dios sync <source> <destination>\n       dios check <source> <destination>"
 
 var aliasFile = filepath.Join(".config", "aliases")
 
@@ -23,6 +23,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
+	case "init":
+		return runInit(args[1:], stdout, stderr)
 	case "sync":
 		return runPaths(args[1:], false, stdout, stderr)
 	case "check":
@@ -31,6 +33,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Error: unknown command: %s\n%s\n", args[0], usage)
 		return 2
 	}
+}
+
+func runInit(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
+		fmt.Fprintf(stderr, "Error: init takes no arguments\n%s\n", usage)
+		return 2
+	}
+	if err := initAliases(aliasFile); err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Created %s\n", aliasFile)
+	return 0
 }
 
 func runPaths(args []string, checkOnly bool, stdout, stderr io.Writer) int {
